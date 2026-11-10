@@ -98,14 +98,13 @@ function elevated(commands) {
 }
 
 const hostsPath = () => (isWin ? 'C:\\Windows\\System32\\drivers\\etc\\hosts' : '/etc/hosts');
-const hostsLine = (ip) => `${ip} ${fqdn(ip)} # Hearth`;
+const hostsLine = (ip, name = fqdn(ip)) => `${ip} ${name} # Hearth`;
 
-function hostsCommands(ip, action) {
-  const name = fqdn(ip);
+function hostsCommands(ip, action, name = fqdn(ip)) {
   const p = hostsPath();
   const drop = `(Get-Content -LiteralPath '${p}') | Where-Object { $_ -notmatch '${name.replace(/\./g, '\\.')}' } | Set-Content -LiteralPath '${p}'`;
   if (action === 'remove') return [drop];
-  return [drop, `Add-Content -LiteralPath '${p}' -Value '${hostsLine(ip)}'`];
+  return [drop, `Add-Content -LiteralPath '${p}' -Value '${hostsLine(ip, name)}'`];
 }
 
 module.exports = { addresses, probeTcp, reach, firewallRules, netshAdd, netshDel, elevated, elevatedCommand, hostsCommands, hostsLine, hostsPath, kindOf, SUFFIX };

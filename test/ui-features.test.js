@@ -475,11 +475,32 @@ async function main() {
     await page.click('.modal button:has-text("Продолжить")');
     await page.waitForSelector('.toast:has-text("вручную")');
   });
+  await step('network: own name (.hearth for everyone), other zones only for the admin beta', async () => {
+    await page.click('.rail-link:has-text("Сеть")');
+    await page.waitForSelector('.net-srv [data-role=netname]');
+    const first = page.locator('.net-srv').first();
+    await first.locator('[data-role=netname]').fill('SoskaCraft');
+    await first.locator('[data-act=name-save]').click();
+    await page.waitForSelector('.toast:has-text("soskacraft.hearth")');
+    await page.waitForSelector('.net-srv [data-act=name-hosts]');
+    assert((await page.locator('.net-srv').first().locator('[data-role=netname]').inputValue()) === 'soskacraft.hearth');
+    await page.uncheck('[data-role=beta-zone]');
+    await page.waitForFunction(() => !document.querySelector('.badge.beta'));
+    await page.locator('.net-srv').first().locator('[data-role=netname]').fill('soskacraft.mc');
+    await page.locator('.net-srv').first().locator('[data-act=name-save]').click();
+    await page.waitForSelector('.toast:has-text("администратор")');
+    await page.check('[data-role=beta-zone]');
+    await page.waitForSelector('.badge.beta');
+    await page.locator('.net-srv').first().locator('[data-role=netname]').fill('soskacraft.mc');
+    await page.locator('.net-srv').first().locator('[data-act=name-save]').click();
+    await page.waitForSelector('.toast:has-text("soskacraft.mc")');
+    await shot('u9-network-name');
+  });
   await step('server page: "В вашей сети" row shows name:port', async () => {
     await page.click('.rail-link:has-text("Обзор")');
     await page.click('.srv-card .card-main');
     await page.waitForSelector('.invite.lan .addr');
-    assert(/^[a-z]+-[a-z]+\.hearth:\d+$/.test((await page.textContent('.invite.lan .addr')).trim()));
+    assert((await page.textContent('.invite.lan .addr')).trim() === 'soskacraft.mc:25565');
   });
   await step('no JavaScript errors in the page', async () => assert(errors.length === 0, errors.join(' | ')));
   await browser.close();
