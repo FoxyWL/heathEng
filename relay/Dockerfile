@@ -1,0 +1,7 @@
+FROM node:22-alpine
+WORKDIR /app
+COPY shared ./shared
+COPY relay ./relay
+ENV CONTROL_PORT=7000 HTTP_PORT=8080 PORT_MIN=20000 PORT_MAX=20100
+EXPOSE 7000 8080 20000-20100/tcp 20000-20100/udp
+CMD ["node", "relay/relay.js"]

@@ -1,0 +1,6 @@
+node_modules/
+data/
+core/target/
+build/node-win-x64.exe
+*.log
+build/hearth-core
