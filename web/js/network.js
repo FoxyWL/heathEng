@@ -82,6 +82,24 @@ export async function networkPage() {
   nameIn.addEventListener('keydown', (e) => e.key === 'Enter' && decode());
   nameIn.addEventListener('input', decode);
 
+  const hostOf = (s) => s.netName || (net.addresses.find((a) => a.primary) || {}).fqdn;
+  const saveName = async (s, name) => {
+    const r = await api('PUT', `/api/servers/${s.id}/netname`, { name });
+    const i = S.servers.findIndex((x) => x.id === s.id);
+    if (i >= 0 && r.id) S.servers[i] = { ...S.servers[i], ...r };
+    toast(name ? T(`Имя ${r.host} сохранено` + (r.restartRequired ? '. Перезапустите сервер: порт изменился' : ''), `Name ${r.host} saved` + (r.restartRequired ? '. Restart the server: the port changed' : '')) : T('Автоимя возвращено', 'Automatic name restored'));
+    if (alive()) drawServers();
+  };
+  const nameEditor = (s) => {
+    const inp = h('input', { type: 'text', value: s.netName || '', placeholder: net.beta && net.beta.anyZone ? 'soskacraft  ·  soskacraft.mc:25570' : 'soskacraft', spellcheck: false, autocomplete: 'off', 'aria-label': T('Своё имя сервера', 'Custom server name'), 'data-role': 'netname' });
+    inp.addEventListener('keydown', (e) => e.key === 'Enter' && e.currentTarget.parentElement.querySelector('[data-act=name-save]').click());
+    return h('div', { class: 'name-edit' },
+      h('label', {}, T('Своё имя', 'Custom name'), net.beta && net.beta.anyZone ? h('span', { class: 'badge beta', title: T('Свои зоны (.mc и другие) пока доступны только администратору', 'Custom zones (.mc and others) are admin-only for now') }, T('бета: любые зоны', 'beta: any zone')) : null),
+      h('div', { class: 'searchbar grow' }, icon('link', 16), inp),
+      h('button', { class: 'btn sm', 'data-act': 'name-save', on: { click: click(() => saveName(s, inp.value)) } }, T('Сохранить', 'Save')),
+      s.netName ? h('button', { class: 'btn sm ghost', 'data-act': 'name-reset', on: { click: click(() => saveName(s, '')) } }, T('Сбросить', 'Reset')) : null,
+      h('small', { class: 'muted' }, T(`Автоимя: ${(net.addresses.find((a) => a.primary) || {}).fqdn || '—'}. Можно написать только слово (будет .${net.suffix}) и порт через двоеточие.`, `Automatic: ${(net.addresses.find((a) => a.primary) || {}).fqdn || '—'}. Type just a word (it gets .${net.suffix}) and a port after a colon.`)));
+  };
   const srvHost = h('div', { class: 'net-servers' });
   function drawServers() {
     const primary = net && net.addresses.find((a) => a.primary);
@@ -95,6 +113,10 @@ export async function networkPage() {
             h('button', { class: 'btn sm', 'data-act': 'check', on: { click: click(() => check(s.id)) } }, icon('refresh', 14), T('Проверить', 'Check')),
             h('button', { class: 'btn sm', 'data-act': 'fw-open', title: T('Разрешить входящие подключения к портам сервера', 'Allow inbound connections to the server ports'), on: { click: runElevated(T('Открыть порты в брандмауэре?', 'Open the ports in the firewall?'), T('Windows покажет запрос прав администратора. Hearth добавит правила «Hearth: …» для портов этого сервера.', 'Windows will ask for administrator rights. Hearth adds “Hearth: …” rules for this server’s ports.'), `/api/servers/${s.id}/firewall`, { action: 'open' }, T('Порты открыты в брандмауэре', 'Ports opened in the firewall')) } }, icon('shield', 14), T('Открыть порты', 'Open ports')),
             h('button', { class: 'btn sm ghost', 'data-act': 'fw-close', on: { click: runElevated(T('Закрыть порты?', 'Close the ports?'), T('Правила «Hearth: …» этого сервера будут удалены.', 'This server’s “Hearth: …” rules will be removed.'), `/api/servers/${s.id}/firewall`, { action: 'close' }, T('Правила удалены', 'Rules removed')) } }, T('Закрыть порты', 'Close ports')))),
+        nameEditor(s),
+        s.netName && primary ? h('div', { class: 'row-actions' },
+          h('button', { class: 'btn sm', 'data-act': 'name-hosts', title: `${primary.ip} ${s.netName}`, on: { click: runElevated(T('Включить имя на этом ПК?', 'Enable the name on this PC?'), T(`В hosts будет добавлена строка «${primary.ip} ${s.netName}». Windows спросит права администратора.`, `The line “${primary.ip} ${s.netName}” is added to hosts. Windows asks for administrator rights.`), '/api/network/hosts', { ip: primary.ip, action: 'add', name: s.netName }, T('Имя добавлено в hosts', 'Name added to hosts')) } }, icon('link', 14), T('Включить имя на этом ПК', 'Enable the name on this PC')),
+          h('button', { class: 'btn sm ghost', 'data-act': 'name-line', on: { click: (e) => copy(`${primary.ip} ${s.netName} # Hearth`, e.currentTarget) } }, icon('copy', 14), T('Строка для hosts друга', 'hosts line for a friend'))) : null,
         rows
           ? h('ul', { class: 'ports' }, rows.map((p) => {
             const [label, tone] = STATUS()[p.status] || [p.status, 'dim'];
@@ -102,7 +124,7 @@ export async function networkPage() {
             return h('li', { class: 'port', 'data-status': p.status },
               h('span', { class: 'mono' }, `${p.port}/${p.proto}`), h('small', {}, lab(p.label)),
               h('span', { class: 'st tone-' + tone }, label),
-              primary && p.proto !== 'http' ? h('span', { class: 'conn' }, copyBtn(`${primary.fqdn}:${p.port}`, T('По имени', 'By name')), copyBtn(`${primary.ip}:${p.port}`, 'IP:порт')) : null,
+              primary && p.proto !== 'http' ? h('span', { class: 'conn' }, copyBtn(`${hostOf(s)}:${p.port}`, T('По имени', 'By name')), copyBtn(`${primary.ip}:${p.port}`, 'IP:порт')) : null,
               tip ? h('small', { class: 'tip' }, tip) : null);
           }))
           : h('p', { class: 'muted' }, r && r.error ? r.error : live ? T('Проверяю…', 'Checking…') : T('Запустите сервер и нажмите «Проверить».', 'Start the server and press “Check”.')));
@@ -123,6 +145,7 @@ export async function networkPage() {
       h('p', { class: 'muted' }, T('Друг прислал имя? Вставьте, и Hearth покажет адрес.', 'Did a friend send a name? Paste it and Hearth shows the address.')),
       h('div', { class: 'name-tool' }, h('div', { class: 'searchbar grow' }, icon('link', 16), nameIn), decoded),
       h('h2', {}, T('Доступ к серверам', 'Server access')),
+      h('label', { class: 'beta-switch' }, h('input', { type: 'checkbox', 'data-role': 'beta-zone', checked: !!(net.beta && net.beta.anyZone), on: { change: async (e) => { net.beta = await api('PUT', '/api/beta', { anyZone: e.currentTarget.checked }); draw(); } } }), h('span', {}, T('Бета для администратора: разрешить свои зоны (soskacraft.mc). Обычным пользователям доступны только имена .', 'Admin beta: allow custom zones (soskacraft.mc). Regular users only get names ending in .') + net.suffix)),
       srvHost,
       h('details', { class: 'help' }, h('summary', {}, T('Как это работает и где имя откроется', 'How it works and where the name opens')),
         h('p', { class: 'muted' }, T('Имя считается из IP-адреса и однозначно расшифровывается обратно, поэтому ему не нужен ни сервер имён, ни регистрация. Но .hearth не настоящий домен интернета: имя открывается там, где его знают. На этом ПК нажмите «Включить имя»; у друга добавьте строку hosts (кнопка выше) или просто введите IP. Из интернета, через роутер без проброса портов, подключаются по публичному адресу туннеля.', 'The name is computed from the IP address and decodes back unambiguously, so it needs neither a name server nor registration. But .hearth is not a real internet domain: the name opens where it is known. On this PC press “Enable the name”; for a friend add the hosts line (button above) or just type the IP. From the internet, with a router and no port forwarding, friends use the tunnel’s public address.')),

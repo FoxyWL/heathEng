@@ -125,7 +125,7 @@ export function renderInvite() {
   const extra = mine.filter((x) => x !== t);
   const lan = S.net && S.net.addresses.find((x) => x.primary);
   const lanPort = lan && portOf(s);
-  const sig = JSON.stringify([s.id, s.game, s.tunnel.enabled, r.enabled, r.host, r.status, r.error, lan && lan.ip, lanPort, mine.map((x) => [x.id, x.info && x.info.url, x.error, x.name])]);
+  const sig = JSON.stringify([s.id, s.game, s.tunnel.enabled, r.enabled, r.host, r.status, r.error, lan && lan.ip, lanPort, s.netName, mine.map((x) => [x.id, x.info && x.info.url, x.error, x.name])]);
   if (ui.inviteSig === sig && ui.invite.firstChild) return;
   ui.inviteSig = sig;
   const row = [h('div', { class: 'lbl' }, T('Адрес для друзей', 'Address for friends'))];
@@ -154,8 +154,8 @@ export function renderInvite() {
   }
   const lanRow = lan && lanPort ? h('div', { class: 'invite lan' },
     h('div', { class: 'lbl' }, T('В вашей сети', 'On your network')),
-    h('div', { class: 'addr' }, `${lan.fqdn}:${lanPort}`),
-    h('button', { class: 'btn', title: T('Скопировать имя', 'Copy the name'), on: { click: (e) => copy(`${lan.fqdn}:${lanPort}`, e.currentTarget) } }, T('Скопировать', 'Copy')),
+    h('div', { class: 'addr' }, `${s.netName || lan.fqdn}:${lanPort}`),
+    h('button', { class: 'btn', title: T('Скопировать имя', 'Copy the name'), on: { click: (e) => copy(`${s.netName || lan.fqdn}:${lanPort}`, e.currentTarget) } }, T('Скопировать', 'Copy')),
     h('button', { class: 'btn ghost', title: `${lan.ip}:${lanPort}`, on: { click: (e) => copy(`${lan.ip}:${lanPort}`, e.currentTarget) } }, 'IP:порт'),
     h('button', { class: 'btn ghost', on: { click: () => go('network') } }, T('Доступ', 'Access'))) : null;
   const more = extra.length ? h('div', { class: 'invite-more' }, extra.map((x) => addrRow(x, false))) : null;

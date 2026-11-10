@@ -342,3 +342,10 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .invite.lan { margin-top: 8px; }
 .invite.lan::before { background: var(--teal); }
 .invite.lan .addr { font-size: 18px; }
+
+.name-edit { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+.name-edit label { font-weight: 600; display: inline-flex; gap: 8px; align-items: center; }
+.name-edit .grow { flex: 1; min-width: 220px; }
+.name-edit small { flex-basis: 100%; }
+.badge.beta { background: rgba(240, 160, 48, 0.18); color: var(--flame-d); font-weight: 600; }
+.beta-switch { display: flex; gap: 8px; align-items: center; margin: 8px 0 12px; color: var(--muted); font-size: 14px; }

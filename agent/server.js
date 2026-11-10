@@ -198,7 +198,7 @@ on('POST', '/api/capacity/auto', async () => {
 
 const netaccess = require('./lib/netaccess');
 const netname = require('./lib/netname');
-on('GET', '/api/network', async () => ({ hostname: require('os').hostname(), suffix: netname.SUFFIX, addresses: netaccess.addresses(), windows: process.platform === 'win32' }));
+on('GET', '/api/network', async () => ({ hostname: require('os').hostname(), suffix: netname.SUFFIX, addresses: netaccess.addresses(), windows: process.platform === 'win32', beta: store.config.beta }));
 on('GET', '/api/network/resolve', async (c) => {
   try {
     const ip = netname.nameToIp(c.query.get('name') || '');
@@ -228,9 +228,55 @@ on('POST', '/api/network/hosts', async (c) => {
   const ip = String((c.body && c.body.ip) || '').trim();
   if (!netname.parseIp(ip) || ip === '0.0.0.0' || ip.startsWith('127.')) throw Object.assign(new Error('нужен IPv4-адрес сервера в сети'), { status: 400 });
   const action = c.body.action === 'remove' ? 'remove' : 'add';
-  if (process.platform !== 'win32') return { executed: false, commands: [`${action === 'add' ? 'echo' : 'remove:'} ${netaccess.hostsLine(ip)} (${netaccess.hostsPath()})`], line: netaccess.hostsLine(ip), fqdn: netname.fqdn(ip) };
-  const res = await netaccess.elevated(netaccess.hostsCommands(ip, action));
-  return { ...res, line: netaccess.hostsLine(ip), fqdn: netname.fqdn(ip) };
+  let name = netname.fqdn(ip);
+  if (c.body.name) {
+    name = badRequest(() => netname.parseCustom(c.body.name, { anyZone: store.config.beta.anyZone })).host;
+  }
+  const line = netaccess.hostsLine(ip, name);
+  if (process.platform !== 'win32') return { executed: false, commands: [`${action === 'add' ? 'echo' : 'remove:'} ${line} (${netaccess.hostsPath()})`], line, fqdn: name };
+  const res = await netaccess.elevated(netaccess.hostsCommands(ip, action, name));
+  return { ...res, line, fqdn: name };
+});
+
+// Своё имя сервера. Всем: <имя>.hearth[:порт]. Бета (администратор): любая зона, например soskacraft.mc:25570. Пустое имя возвращает автоимя.
+const badRequest = (fn) => {
+  try {
+    return fn();
+  } catch (e) {
+    throw Object.assign(new Error(e.message), { status: 400 });
+  }
+};
+on('GET', '/api/beta', async () => store.config.beta);
+on('PUT', '/api/beta', async (c) => {
+  if (c.body && typeof c.body.anyZone === 'boolean') store.config.beta.anyZone = c.body.anyZone;
+  store.saveConfig();
+  return store.config.beta;
+});
+on('PUT', '/api/servers/:id/netname', async (c) => {
+  const s = mgr.rec(c.params.id);
+  const raw = String((c.body && c.body.name) || '').trim();
+  if (!raw) {
+    delete s.netName;
+    store.saveState();
+    return mgr.update(s.id, {});
+  }
+  const { host, port } = badRequest(() => netname.parseCustom(raw, { anyZone: store.config.beta.anyZone }));
+  if (mgr.list().some((o) => o.id !== s.id && o.netName === host)) throw Object.assign(new Error(`имя ${host} уже занято другим сервером`), { status: 409 });
+  let restart = false;
+  if (port !== null) {
+    const f = catalog.games[s.game].fields.find((x) => x.key === 'port');
+    if (!f) throw Object.assign(new Error('у этой игры порт меняется в разделе «Запуск»: укажите имя без порта'), { status: 400 });
+    if (port < (f.min || 1) || port > (f.max || 65535)) throw Object.assign(new Error(`порт для этой игры: ${f.min || 1}–${f.max || 65535}`), { status: 400 });
+    const busy = mgr.list().find((o) => o.id !== s.id && catalog.portsOf(o.game, o.settings).some((p) => p.port === port && p.proto === 'tcp'));
+    if (busy) throw Object.assign(new Error(`порт ${port} уже занят сервером «${busy.name}»`), { status: 409 });
+    if (+s.settings.port !== port) {
+      mgr.update(s.id, { settings: { port } });
+      restart = ['running', 'starting'].includes(mgr.view(s).state);
+    }
+  }
+  s.netName = host;
+  store.saveState();
+  return { ...mgr.update(s.id, {}), host, port, restartRequired: restart };
 });
 
 on('GET', '/api/catalog', async () => catalog.describe());

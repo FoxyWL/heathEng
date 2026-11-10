@@ -158,6 +158,45 @@ fs.writeFileSync(listen, "const net=require('net');net.createServer((s)=>s.end()
     assert(hs.line.startsWith(lan.ip + ' ' + lan.fqdn));
     for (const bad of ['127.0.0.1', '0.0.0.0', 'abc', '1.2.3']) assert.strictEqual((await api('POST', '/api/network/hosts', { ip: bad })).s, 400, bad);
     ok('hosts: строка собирается верно, loopback и мусор отклоняются');
+
+    // ---- своё имя сервера: всем .hearth, свои зоны только в бете (администратор)
+    const SA = (await api('POST', '/api/servers', { game: 'custom', name: 'A', settings: { command: 'node -e 0', port: 15701 } })).j;
+    const SB = (await api('POST', '/api/servers', { game: 'custom', name: 'B', settings: { command: 'node -e 0', port: 15702 } })).j;
+    assert.strictEqual(SA.netName, '');
+    let r = await api('PUT', `/api/servers/${SA.id}/netname`, { name: 'SoskaCraft' });
+    assert(r.s === 200 && r.j.host === 'soskacraft.hearth', JSON.stringify(r.j));
+    r = await api('PUT', `/api/servers/${SB.id}/netname`, { name: 'soskacraft.hearth' });
+    assert.strictEqual(r.s, 409, 'имя занято');
+    r = await api('PUT', `/api/servers/${SB.id}/netname`, { name: 'bcraft:15701' });
+    assert.strictEqual(r.s, 409, 'порт занят другим сервером');
+    ok('своё имя: слово получает .hearth и в нижнем регистре, занятые имя и порт отклоняются');
+    await api('PUT', '/api/beta', { anyZone: false });
+    r = await api('PUT', `/api/servers/${SB.id}/netname`, { name: 'bcraft.mc' });
+    assert(r.s === 400 && /администратор/.test(r.j.error || JSON.stringify(r.j)), JSON.stringify(r.j));
+    r = await api('POST', '/api/network/hosts', { ip: lan.ip, action: 'add', name: 'bcraft.mc' });
+    assert.strictEqual(r.s, 400, 'hosts тоже не принимает чужую зону');
+    ok('обычный пользователь: зона .mc отклонена, и в имени, и в hosts');
+    await api('PUT', '/api/beta', { anyZone: true });
+    r = await api('PUT', `/api/servers/${SB.id}/netname`, { name: 'bcraft.mc:15720' });
+    assert(r.s === 200 && r.j.host === 'bcraft.mc' && r.j.settings.port === 15720 && !r.j.restartRequired, JSON.stringify(r.j));
+    assert.strictEqual((await api('GET', '/api/servers')).j.find((x) => x.id === SB.id).ports[0].port, 15720);
+    for (const bad of ['bcraft.com', 'a b.mc', '1.2.3.4', 'x.mc:0', 'x.mc:70000', 'x.mc:', 'https://x.mc']) assert.strictEqual((await api('PUT', `/api/servers/${SB.id}/netname`, { name: bad })).s, 400, bad);
+    ok('бета (администратор): bcraft.mc:15720 принято, порт сервера сменился, настоящие зоны и мусор отклонены');
+    r = await api('POST', '/api/network/hosts', { ip: lan.ip, action: 'add', name: 'bcraft.mc' });
+    assert(r.s === 200 && r.j.line === `${lan.ip} bcraft.mc # Hearth`, JSON.stringify(r.j));
+    ok('hosts: строка для своего имени собирается с этим именем');
+    r = await api('PUT', `/api/servers/${SB.id}/netname`, { name: '' });
+    assert(r.s === 200 && r.j.netName === '');
+    ok('пустое имя возвращает автоимя');
+    await until(() => {
+      try {
+        const x = JSON.parse(fs.readFileSync(path.join(data, 'state.json'), 'utf8')).servers.find((v) => v.id === SA.id);
+        return x && x.netName === 'soskacraft.hearth';
+      } catch {
+        return false;
+      }
+    }, 5000, 'имя записано в state.json');
+    ok('своё имя сохраняется в state.json');
     agent.kill();
     console.log(`\nnetwork: ${n} проверок пройдено`);
     process.exit(0);

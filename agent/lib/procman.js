@@ -103,6 +103,7 @@ class Manager {
       autoRestart: !!s.autoRestart,
       autostart: !!s.autostart,
       tunnel: s.tunnel,
+      netName: s.netName || '',
       state: r.state,
       msg: r.msg,
       pct: r.pct,

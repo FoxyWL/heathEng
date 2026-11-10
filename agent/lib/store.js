@@ -58,6 +58,7 @@ const config = readJson(paths.config, {});
 config.panelToken = config.panelToken || crypto.randomBytes(16).toString('hex');
 config.lang = config.lang || 'ru';
 config.relay = config.relay || { enabled: false, host: '', port: 7000, token: '', name: 'hearth' };
+config.beta = { anyZone: true, ...(config.beta || {}) }; // бета для администратора (пока им считается владелец этого ПК): свои зоны вроде .mc
 config.ai = config.ai || { enabled: false, apiKey: '', model: 'claude-sonnet-5-5' };
 
 const state = readJson(paths.state, { servers: [], tasks: [], tunnels: [] });

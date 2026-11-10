@@ -64,4 +64,42 @@ function nameToIp(name) {
 
 const fqdn = (ip) => ipToName(ip) + '.' + SUFFIX;
 
-module.exports = { ipToName, nameToIp, fqdn, parseIp, SUFFIX };
+// Своё имя сервера: soskacraft или soskacraft.hearth[:порт] (всем), soskacraft.mc[:порт] (бета, администратор). Имя пишется в hosts, поэтому разбор строгий.
+// Популярные «настоящие» зоны запрещены: запись в hosts перекрыла бы на этом ПК настоящий сайт.
+const REAL_TLD = new Set(['com', 'net', 'org', 'ru', 'io', 'gg', 'tv', 'me', 'info', 'biz', 'xyz', 'dev', 'app', 'edu', 'gov', 'su', 'ua', 'by', 'kz', 'de', 'uk', 'us', 'co', 'cc', 'to', 'ly']);
+const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+// anyZone=false (обычный пользователь): только зона .hearth, голое слово получает её само. anyZone=true (бета, администратор): любая зона вроде .mc.
+function parseCustom(input, { anyZone = false } = {}) {
+  let v = String(input || '').trim().toLowerCase();
+  if (!v) throw new Error('введите имя, например soskacraft.mc');
+  if (/[/\\@\s]/.test(v)) throw new Error('имя без пробелов, схемы и путей: только буквы, цифры, дефис и точки');
+  let port = null;
+  const m = /^(.*):(\d{1,5})$/.exec(v);
+  if (m) {
+    v = m[1];
+    port = +m[2];
+    if (port < 1 || port > 65535) throw new Error('порт должен быть от 1 до 65535');
+  } else if (v.includes(':')) throw new Error('после двоеточия нужен порт, например soskacraft.mc:25565');
+  if (v.length > 100) throw new Error('имя слишком длинное (до 100 знаков)');
+  if (!v.includes('.')) v += '.' + SUFFIX;
+  const labels = v.split('.');
+  if (!labels.every((l) => LABEL.test(l))) throw new Error('допустимы латинские буквы, цифры и дефис (не в начале и не в конце части имени)');
+  if (labels.every((l) => /^\d+$/.test(l))) throw new Error('это похоже на IP-адрес, введите имя из букв');
+  const tld = labels[labels.length - 1];
+  if (tld === SUFFIX) {
+    try {
+      if (labels.length === 2) {
+        nameToIp(v);
+        throw new Error('это имя совпадает с автоматическим именем какого-то IP, придумайте другое');
+      }
+    } catch (e) {
+      if (/совпадает/.test(e.message)) throw e;
+    }
+  } else if (!anyZone) throw new Error(`обычным пользователям доступна зона .${SUFFIX}, например soskacraft.${SUFFIX}. Свои зоны (.mc и другие) — бета для администратора`);
+  if (tld === 'localhost' || v === 'localhost') throw new Error('имя localhost занято системой');
+  if (REAL_TLD.has(tld)) throw new Error(`зона .${tld} принадлежит настоящим сайтам: имя перекрыло бы их на этом ПК. Возьмите, например, .mc, .game, .lan или .srv`);
+  return { host: v, port };
+}
+
+module.exports = { ipToName, nameToIp, fqdn, parseIp, parseCustom, SUFFIX };
