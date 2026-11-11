@@ -15,7 +15,7 @@ const root = path.join(__dirname, '..');
 const PORT = '17160';
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'hearth-net-'));
 const listen = path.join(dir, 'listen.js');
-fs.writeFileSync(listen, "const net=require('net');net.createServer((s)=>s.end()).listen(+process.argv[2],process.argv[3],()=>console.log('listening'));setInterval(()=>{},1000);");
+fs.writeFileSync(listen, "const net=require('net');net.createServer((s)=>{s.on('error',()=>{});s.end()}).listen(+process.argv[2],process.argv[3],()=>console.log('listening'));setInterval(()=>{},1000);");
 
 (async () => {
   // ---- кодек
@@ -84,6 +84,59 @@ fs.writeFileSync(listen, "const net=require('net');net.createServer((s)=>s.end()
   assert.strictEqual(Buffer.from(enc, 'base64').toString('utf16le'), script.join('; '));
   assert(/-Verb RunAs/.test(na.elevatedCommand(script)));
   ok('брандмауэр: имя правила очищается от кавычек и служебных знаков, команды netsh и запуск от администратора собираются верно');
+
+  // ---- поддержание сети: смена IP, недоступный сервер, hosts
+  {
+    const { NetWatch } = require('../agent/lib/netwatch');
+    const events = [];
+    const logs = [];
+    let ip = '10.0.0.5';
+    let status = 'ok';
+    let up = true;
+    const server = { id: 's1', name: 'Test', game: 'custom', settings: { port: 17999 } };
+    const store = { config: { net: { lastIp: '' } }, state: { servers: [server] }, saveConfig() {} };
+    const mgr = { view: () => ({ state: 'running', startedAt: Date.now() - 60000 }), _log: (sv, k, t) => logs.push([k, t]) };
+    const w = new NetWatch({ mgr, emit: (t, e) => events.push(e), store, graceMs: 0, addrFn: () => (up ? [{ ip, fqdn: fqdn(ip), primary: true }] : []), reachFn: async () => ({ ports: [{ port: 17999, proto: 'tcp', status }] }) });
+    w.checkIp();
+    assert.strictEqual(store.config.net.lastIp, '10.0.0.5');
+    assert.strictEqual(events.length, 0, 'первая запись IP не событие');
+    ip = '10.0.0.77';
+    w.checkIp();
+    assert(events.length === 1 && events[0].type === 'ip-changed' && events[0].from === '10.0.0.5' && events[0].fqdn === fqdn('10.0.0.77'), JSON.stringify(events));
+    assert(logs.some(([k, t]) => k === 'err' && /IP этого ПК изменился/.test(t)), 'в консоль сервера записано предупреждение');
+    ok('смена IP: событие ip-changed, предупреждение в консоли запущенного сервера');
+    up = false;
+    w.checkIp();
+    w.checkIp();
+    up = true;
+    w.checkIp();
+    assert.deepStrictEqual(events.slice(1).map((e) => e.type), ['offline', 'online'], 'offline один раз, затем online');
+    ok('потеря и возврат сети: по одному событию');
+    status = 'loopback-only';
+    await w.checkServers();
+    await w.checkServers();
+    assert(!events.some((e) => e.type === 'unreachable'), 'две проверки ещё не повод');
+    await w.checkServers();
+    await w.checkServers();
+    assert.strictEqual(events.filter((e) => e.type === 'unreachable').length, 1, 'предупреждение приходит один раз');
+    status = 'ok';
+    await w.checkServers();
+    assert.strictEqual(events[events.length - 1].type, 'recovered');
+    ok('недоступный в сети сервер: предупреждение после 3 проверок (один раз), затем «снова доступен»');
+
+    const hf = path.join(dir, 'hosts');
+    fs.writeFileSync(hf, '127.0.0.1 localhost\n10.0.0.5 old.hearth # Hearth\n10.0.0.77 soska.hearth # Hearth\n10.0.0.9 other.example\n');
+    const ent = na.readHosts(hf);
+    assert.strictEqual(ent.size, 2, 'берутся только строки Hearth');
+    assert.strictEqual(na.hostsState('soska.hearth', '10.0.0.77', ent), 'ok');
+    assert.strictEqual(na.hostsState('old.hearth', '10.0.0.77', ent), 'stale');
+    assert.strictEqual(na.hostsState('nope.hearth', '10.0.0.77', ent), 'missing');
+    assert.strictEqual(na.readHosts(path.join(dir, 'нет-такого')).size, 0);
+    const st = require('../agent/lib/startup');
+    assert(/^".*" --startup$/.test(st.command()));
+    assert.deepStrictEqual(await st.status(), { supported: false, enabled: false });
+    ok('hosts: состояния ok / stale / missing, чужие строки не трогаются; автозапуск вне Windows честно «не поддерживается»');
+  }
 
   // ---- приложение
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hearth-netdata-'));

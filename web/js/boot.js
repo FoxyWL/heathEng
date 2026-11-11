@@ -2,7 +2,7 @@
 // @imports:start
 import { appendLine, redrawLog, updateCmdState } from './console.js';
 import { connectEvents, loadAll } from './events.js';
-import { $root, T, h, hooks, setLang, setToken, token } from './lib.js';
+import { $root, T, h, hooks, setLang, setToken, toast, token } from './lib.js';
 import { newServerModal } from './newserver.js';
 import { openPalette } from './palette.js';
 import { renderHeader, renderInvite, renderTab } from './server.js';
@@ -76,6 +76,18 @@ hooks.traffic = () => {
     if (ui.redrawList) ui.redrawList();
     if (ui.onTraffic) ui.onTraffic();
   }
+};
+hooks.net = (ev) => {
+  const say = {
+    'ip-changed': () => T(`IP этого ПК изменился: ${ev.from} → ${ev.to}. Обновите имена в «Сети»`, `This PC’s IP changed: ${ev.from} → ${ev.to}. Update the names in “Network”`),
+    offline: () => T('ПК потерял сеть: друзья не подключатся, пока она не вернётся', 'The PC lost its network: friends cannot connect until it is back'),
+    online: () => T(`Сеть вернулась: ${ev.ip}`, `The network is back: ${ev.ip}`),
+    unreachable: () => T(`Сервер «${ev.name}» недоступен в сети. Откройте «Сеть»`, `Server “${ev.name}” is not reachable on the network. Open “Network”`),
+    recovered: () => T(`Сервер «${ev.name}» снова доступен в сети`, `Server “${ev.name}” is reachable again`),
+  }[ev.type];
+  if (say) toast(say(), ['unreachable', 'offline', 'ip-changed'].includes(ev.type));
+  if (S.view === 'server') renderInvite();
+  if (S.view === 'network' && ui.redrawNet) ui.redrawNet();
 };
 hooks.tasks = () => {
   if (S.view === 'server' && S.tab === 'schedule') renderTab();

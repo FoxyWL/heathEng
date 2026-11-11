@@ -36,6 +36,31 @@ export async function networkPage() {
   let net = null;
   const reach = {};
   const alive = () => page.isConnected && S.view === 'network';
+  ui.redrawNet = async () => {
+    if (!alive()) return;
+    try {
+      net = await api('GET', '/api/network');
+      S.net = net;
+    } catch {
+      return;
+    }
+    draw();
+  };
+  const HOSTS = () => ({
+    ok: [T('включено на этом ПК', 'enabled on this PC'), 'ok'],
+    stale: [T('ведёт на старый IP: обновите', 'points to an old IP: update'), 'bad'],
+    missing: [T('на этом ПК не включено', 'not enabled on this PC'), 'dim'],
+  });
+  const hostsBadge = (name) => {
+    const st = net.hosts && net.hosts[name];
+    if (!st) return null;
+    const [label, tone] = HOSTS()[st];
+    return h('small', { class: 'tone-' + tone, 'data-hosts': st }, label);
+  };
+  const FW = () => ({
+    present: [T('Брандмауэр: порты открыты', 'Firewall: ports open'), 'ok'],
+    missing: [T('Брандмауэр: правила нет, друзья могут не пройти', 'Firewall: no rule, friends may be blocked'), 'warn'],
+  });
 
   const copyBtn = (text, label) => h('button', { class: 'btn sm', title: text, on: { click: (e) => copy(text, e.currentTarget) } }, icon('copy', 14), label || T('Копировать', 'Copy'));
 
@@ -63,6 +88,7 @@ export async function networkPage() {
       return h('article', { class: 'addr-card' + (a.primary ? ' primary' : ''), 'data-ip': a.ip },
         h('div', { class: 'ac-top' }, h('b', { class: 'mono' }, a.ip), a.primary ? h('span', { class: 'badge running' }, T('основной', 'main')) : null, a.virtual ? h('span', { class: 'badge' }, T('виртуальный', 'virtual')) : null),
         h('div', { class: 'ac-name' }, h('span', { class: 'mono' }, a.fqdn), copyBtn(a.fqdn)),
+        a.primary ? hostsBadge(a.fqdn) : null,
         h('small', { class: 'tone-' + tone }, `${kind} · ${a.iface}`));
     })
     : [h('p', { class: 'muted' }, T('Сетевых адресов не найдено: подключите ПК к сети.', 'No network addresses found: connect the PC to a network.'))];
@@ -98,6 +124,7 @@ export async function networkPage() {
       h('div', { class: 'searchbar grow' }, icon('link', 16), inp),
       h('button', { class: 'btn sm', 'data-act': 'name-save', on: { click: click(() => saveName(s, inp.value)) } }, T('Сохранить', 'Save')),
       s.netName ? h('button', { class: 'btn sm ghost', 'data-act': 'name-reset', on: { click: click(() => saveName(s, '')) } }, T('Сбросить', 'Reset')) : null,
+      s.netName ? hostsBadge(s.netName) : null,
       h('small', { class: 'muted' }, T(`Автоимя: ${(net.addresses.find((a) => a.primary) || {}).fqdn || '—'}. Можно написать только слово (будет .${net.suffix}) и порт через двоеточие.`, `Automatic: ${(net.addresses.find((a) => a.primary) || {}).fqdn || '—'}. Type just a word (it gets .${net.suffix}) and a port after a colon.`)));
   };
   const srvHost = h('div', { class: 'net-servers' });
@@ -110,6 +137,7 @@ export async function networkPage() {
       return h('article', { class: 'net-srv', 'data-server': s.id },
         h('div', { class: 'ns-head' }, gameBadge(s.game, 'sm'), h('b', {}, s.name), h('span', { class: 'badge ' + s.state }, STATE()[s.state] || s.state),
           h('span', { class: 'ns-actions' },
+            r && r.firewall && FW()[r.firewall] ? h('small', { class: 'tone-' + FW()[r.firewall][1], 'data-fw': r.firewall }, FW()[r.firewall][0]) : null,
             h('button', { class: 'btn sm', 'data-act': 'check', on: { click: click(() => check(s.id)) } }, icon('refresh', 14), T('Проверить', 'Check')),
             h('button', { class: 'btn sm', 'data-act': 'fw-open', title: T('Разрешить входящие подключения к портам сервера', 'Allow inbound connections to the server ports'), on: { click: runElevated(T('Открыть порты в брандмауэре?', 'Open the ports in the firewall?'), T('Windows покажет запрос прав администратора. Hearth добавит правила «Hearth: …» для портов этого сервера.', 'Windows will ask for administrator rights. Hearth adds “Hearth: …” rules for this server’s ports.'), `/api/servers/${s.id}/firewall`, { action: 'open' }, T('Порты открыты в брандмауэре', 'Ports opened in the firewall')) } }, icon('shield', 14), T('Открыть порты', 'Open ports')),
             h('button', { class: 'btn sm ghost', 'data-act': 'fw-close', on: { click: runElevated(T('Закрыть порты?', 'Close the ports?'), T('Правила «Hearth: …» этого сервера будут удалены.', 'This server’s “Hearth: …” rules will be removed.'), `/api/servers/${s.id}/firewall`, { action: 'close' }, T('Правила удалены', 'Rules removed')) } }, T('Закрыть порты', 'Close ports')))),
@@ -135,6 +163,7 @@ export async function networkPage() {
     const primary = net.addresses.find((a) => a.primary);
     fill(page,
       h('h1', {}, T('Сеть и имена', 'Network and names')),
+      Object.values(net.hosts || {}).includes('stale') ? h('div', { class: 'net-banner', role: 'alert' }, icon('refresh', 16), T(`IP этого ПК изменился (теперь ${(primary || {}).ip || '—'}). Имена в hosts ведут на старый адрес: нажмите «Включить имя на этом ПК», а друзьям отправьте новую строку для hosts.`, `This PC’s IP changed (now ${(primary || {}).ip || '—'}). Names in hosts point to the old address: press “Enable the name on this PC” and send friends the new hosts line.`)) : null,
       h('p', { class: 'lead' }, T('Hearth показывает адреса вашего ПК, превращает IP в короткое имя вида sajiba-feleesee.hearth и проверяет, что сервер действительно доступен в сети.', 'Hearth lists your PC’s addresses, turns an IP into a short name like sajiba-feleesee.hearth and checks that a server is really reachable on the network.')),
       h('h2', {}, T('Адреса этого ПК', 'This PC’s addresses')),
       h('div', { class: 'addr-cards' }, addrCards()),

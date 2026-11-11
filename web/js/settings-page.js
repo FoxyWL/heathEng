@@ -2,7 +2,7 @@
 // @imports:start
 import { T, api, applyTheme, click, fmtMem, guard, h, lang, setLang, toast } from './lib.js';
 import { quitApp, render } from './shell.js';
-import { S, ui } from './state.js';
+import { S, fill, ui } from './state.js';
 // @imports:end
 
 export function settingsPage() {
@@ -32,12 +32,30 @@ export function settingsPage() {
     toast(T('Сохранено', 'Saved'));
     settingsPage();
   }));
+  const startSect = h('div', { class: 'sect', 'data-sect': 'startup', hidden: true });
+  api('GET', '/api/startup').then((st) => {
+    if (!st.supported) return;
+    const box = h('input', { type: 'checkbox', checked: st.enabled, 'data-role': 'startup' });
+    box.addEventListener('change', async () => {
+      try {
+        const r = await api('PUT', '/api/startup', { enabled: box.checked });
+        box.checked = r.enabled;
+        toast(r.enabled ? T('Hearth будет запускаться вместе с Windows', 'Hearth will start with Windows') : T('Автозапуск выключен', 'Autostart off'));
+      } catch (e) {
+        box.checked = !box.checked;
+        toast(e.message, true);
+      }
+    });
+    startSect.hidden = false;
+    fill(startSect, h('h3', {}, T('Запуск вместе с Windows', 'Start with Windows')), h('p', { class: 'muted' }, T('Hearth стартует без окна и поднимает серверы с включённым автозапуском, поэтому сервер работает после перезагрузки ПК. Окно открывается из меню «Пуск».', 'Hearth starts without a window and starts the servers that have autostart enabled, so the server is back after a PC reboot. Open the window from the Start menu.')), h('label', { class: 'check' }, box, h('span', {}, T('Запускать Hearth при входе в Windows', 'Start Hearth when I sign in to Windows'))));
+  }).catch(() => {});
   ui.main.replaceChildren(
     h('div', { class: 'page' },
       h('h1', {}, T('Настройки', 'Settings')),
       h('div', { class: 'form', style: 'margin-top:18px' },
         h('div', { class: 'field' }, h('label', {}, T('Язык', 'Language'), l)),
         h('div', { class: 'field' }, h('label', {}, T('Тема оформления', 'Theme'), themeSel))),
+      startSect,
       h('div', { class: 'sect' },
         h('h3', {}, T('ИИ-помощник для логов', 'AI log assistant')),
         h('p', { class: 'muted' }, T('По умолчанию выключен и ничего не отправляет. Когда включён, фрагмент журнала уходит в Claude API по вашему ключу только после нажатия «Объяснить ошибки» в консоли. Ответы могут быть неточными — проверяйте перед применением на рабочем сервере.', 'Off by default and sends nothing. When enabled, a log fragment goes to the Claude API with your own key only after you press “Explain errors” in the console. Answers may be inaccurate — verify before applying them on a live server.')),

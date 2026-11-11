@@ -2,7 +2,8 @@
 // Сетевой доступ: адреса этого ПК, проверка, что сервер слушает на них, правила брандмауэра Windows и запись имени в hosts.
 const os = require('os');
 const net = require('net');
-const { spawn } = require('child_process');
+const fs = require('fs');
+const { spawn, execFile } = require('child_process');
 const { fqdn, ipToName, SUFFIX } = require('./netname');
 
 const isWin = process.platform === 'win32';
@@ -97,7 +98,7 @@ function elevated(commands) {
   });
 }
 
-const hostsPath = () => (isWin ? 'C:\\Windows\\System32\\drivers\\etc\\hosts' : '/etc/hosts');
+const hostsPath = () => process.env.HEARTH_HOSTS_FILE || (isWin ? 'C:\\Windows\\System32\\drivers\\etc\\hosts' : '/etc/hosts');
 const hostsLine = (ip, name = fqdn(ip)) => `${ip} ${name} # Hearth`;
 
 function hostsCommands(ip, action, name = fqdn(ip)) {
@@ -107,4 +108,35 @@ function hostsCommands(ip, action, name = fqdn(ip)) {
   return [drop, `Add-Content -LiteralPath '${p}' -Value '${hostsLine(ip, name)}'`];
 }
 
-module.exports = { addresses, probeTcp, reach, firewallRules, netshAdd, netshDel, elevated, elevatedCommand, hostsCommands, hostsLine, hostsPath, kindOf, SUFFIX };
+/** Строки Hearth в hosts: имя → IP. Читать файл можно без прав администратора. */
+function readHosts(file = hostsPath()) {
+  const map = new Map();
+  let text = '';
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return map;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^\s*(\d{1,3}(?:\.\d{1,3}){3})\s+(\S+)\s*#\s*Hearth\b/.exec(line);
+    if (m) map.set(m[2].toLowerCase(), m[1]);
+  }
+  return map;
+}
+
+/** ok: имя ведёт на текущий IP, stale: ведёт на старый, missing: записи нет. */
+function hostsState(name, ip, entries = readHosts()) {
+  const cur = entries.get(String(name).toLowerCase());
+  return !cur ? 'missing' : cur === ip ? 'ok' : 'stale';
+}
+
+/** Есть ли правило брандмауэра Windows для порта (чтение прав администратора не требует). Вне Windows состояние неизвестно. */
+function firewallState(rules) {
+  if (!isWin || !rules.length) return Promise.resolve('unknown');
+  const one = (r) => new Promise((resolve) => {
+    execFile('netsh', ['advfirewall', 'firewall', 'show', 'rule', `name=${r.name}`], { windowsHide: true, timeout: 5000 }, (err, out) => resolve(err && err.code === 'ENOENT' ? null : !err && /-{10,}/.test(String(out)))); // правило есть: код 0 и вывод с линией-разделителем (не зависит от языка Windows)
+  });
+  return Promise.all(rules.map(one)).then((r) => (r.includes(null) ? 'unknown' : r.every(Boolean) ? 'present' : 'missing'));
+}
+
+module.exports = { readHosts, hostsState, firewallState, addresses, probeTcp, reach, firewallRules, netshAdd, netshDel, elevated, elevatedCommand, hostsCommands, hostsLine, hostsPath, kindOf, SUFFIX };
