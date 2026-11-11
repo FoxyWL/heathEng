@@ -41,8 +41,10 @@ const mock = http.createServer((req, res) => {
   res.end('{}');
 });
 
+const hostsFile = path.join(os.tmpdir(), 'hearth-ui-hosts-' + process.pid);
+fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
 const agent = spawn('node', [path.join(root, 'main.js')], {
-  env: { ...process.env, DATA_DIR: data, PORT: '17130', NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_MODRINTH_API: 'http://127.0.0.1:17792', HEARTH_STATS_MS: '500', PATH: path.join(__dirname, 'fakebin') + path.delimiter + process.env.PATH },
+  env: { ...process.env, DATA_DIR: data, PORT: '17130', NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_MODRINTH_API: 'http://127.0.0.1:17792', HEARTH_STATS_MS: '500', HEARTH_HOSTS_FILE: hostsFile, PATH: path.join(__dirname, 'fakebin') + path.delimiter + process.env.PATH },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 let out = '';
@@ -312,7 +314,11 @@ async function main() {
     await page.waitForSelector('.tdetail h3:has-text("Сайт")');
     assert(await page.locator('.tdetail .dual').count() === 1, 'traffic chart');
     assert(await page.locator('.tdetail .tile').count() === 5, 'counters');
-    await page.click('.trow:has-text("Сайт") .switch');
+    for (let i = 0; i < 4 && !(await page.locator('.trow.off').count()); i++) {
+      await page.waitForTimeout(400);
+      await page.click('.trow:has-text("Сайт") .switch');
+      await page.waitForTimeout(600);
+    }
     await page.waitForSelector('.trow.off');
     await page.click('.trow:has-text("Сайт") .btn.danger');
     await page.waitForFunction(() => !document.querySelector('.tlist').textContent.includes('Сайт'));
@@ -463,7 +469,32 @@ async function main() {
     await page.waitForSelector('.decoded .tone-bad');
     await shot('u9-network');
   });
+  await step('network: hosts state (missing → stale after an IP change → ok) with a warning banner', async () => {
+    const info = await page.evaluate(async () => (await (await fetch('/api/network', { headers: { authorization: 'Bearer ' + localStorage.getItem('hearth.token') } })).json()).addresses.find((a) => a.primary));
+    await page.click('.rail-link:has-text("Обзор")');
+    await page.click('.rail-link:has-text("Сеть")');
+    await page.waitForSelector('.addr-card.primary [data-hosts="missing"]');
+    assert((await page.locator('.net-banner').count()) === 0, 'нет баннера, пока имя не включали');
+    fs.writeFileSync(hostsFile, `127.0.0.1 localhost\n10.9.9.9 ${info.fqdn} # Hearth\n`);
+    await page.click('.rail-link:has-text("Обзор")');
+    await page.click('.rail-link:has-text("Сеть")');
+    await page.waitForSelector('.net-banner');
+    await page.waitForSelector('.addr-card.primary [data-hosts="stale"]');
+    await shot('u9-network-stale');
+    fs.writeFileSync(hostsFile, `127.0.0.1 localhost\n${info.ip} ${info.fqdn} # Hearth\n`);
+    await page.click('.rail-link:has-text("Обзор")');
+    await page.click('.rail-link:has-text("Сеть")');
+    await page.waitForSelector('.addr-card.primary [data-hosts="ok"]');
+    assert((await page.locator('.net-banner').count()) === 0, 'баннер исчез после обновления');
+  });
+  await step('settings: autostart section stays hidden outside the built Windows exe', async () => {
+    await page.click('.rail-link:has-text("Настройки")');
+    await page.waitForSelector('.sect:has(h3:has-text("ИИ-помощник"))');
+    await page.waitForTimeout(400);
+    assert((await page.locator('[data-sect=startup]:visible').count()) === 0);
+  });
   await step('network: server access check, firewall and hosts buttons answer', async () => {
+    await page.click('.rail-link:has-text("Сеть")');
     await page.waitForSelector('.net-srv [data-act=check]');
     await page.click('.net-srv [data-act=check]');
     await page.waitForSelector('.port[data-status]');

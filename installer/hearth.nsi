@@ -1,11 +1,11 @@
-; Установщик Hearth (NSIS 3, Unicode). Сборка: makensis -DVER=1.3.0 -DSRC=<папка с hearth.exe> installer/hearth.nsi
+; Установщик Hearth (NSIS 3, Unicode). Сборка: makensis -DVER=1.3.1 -DSRC=<папка с hearth.exe> installer/hearth.nsi
 Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 
 !ifndef VER
-  !define VER "1.3.0"
+  !define VER "1.3.1"
 !endif
 !ifndef SRC
   !define SRC "..\dist"

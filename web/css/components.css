@@ -349,3 +349,6 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .name-edit small { flex-basis: 100%; }
 .badge.beta { background: rgba(240, 160, 48, 0.18); color: var(--flame-d); font-weight: 600; }
 .beta-switch { display: flex; gap: 8px; align-items: center; margin: 8px 0 12px; color: var(--muted); font-size: 14px; }
+.net-banner { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; margin: 14px 0; border-radius: 12px; border: 1px solid var(--warn); background: rgba(240, 160, 48, 0.12); }
+.net-banner svg { flex: none; margin-top: 2px; color: var(--warn); }
+.ns-actions small { align-self: center; }

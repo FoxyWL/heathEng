@@ -99,6 +99,12 @@ export function connectEvents() {
   on('tunnels', (v) => {
     if (setTun(v)) hooks.tunnels();
   });
+  on('net', async (ev) => {
+    try {
+      S.net = await api('GET', '/api/network');
+    } catch {}
+    hooks.net(ev);
+  });
   on('traffic', onTraffic);
   on('tasks', (v) => {
     S.tasks = v;

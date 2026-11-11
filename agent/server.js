@@ -5,6 +5,7 @@ const path = require('path');
 const { spawn } = require('child_process');
 const store = require('./lib/store');
 const catalog = require('./lib/catalog');
+const { NetWatch } = require('./lib/netwatch');
 const files = require('./lib/files');
 const ai = require('./lib/ai');
 const { Manager } = require('./lib/procman');
@@ -18,7 +19,7 @@ const modrinth = require('./lib/modrinth');
 
 const BIND = process.env.BIND || '127.0.0.1';
 const WEB = path.join(__dirname, '..', 'web');
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const GUI = isGuiExe(); // установленная версия без окна консоли
 let PORT = 0;
 let appMode = false;
@@ -32,6 +33,7 @@ function emit(type, payload) {
 }
 
 const mgr = new Manager(emit);
+const netwatch = new NetWatch({ mgr, emit, store });
 const sched = new Scheduler(mgr, emit);
 const tunnel = new TunnelClient();
 const lab = (o) => (o && typeof o === 'object' ? o.ru || o.en : o || '');
@@ -173,6 +175,8 @@ on('GET', '/api/system', async () => ({
   core: { ok: mgr.core.ok, cores: mgr.core.sys ? mgr.core.sys.cores : 0 },
   ai: { enabled: store.config.ai.enabled, hasKey: !!store.config.ai.apiKey, model: store.config.ai.model },
 }));
+on('GET', '/api/startup', async () => startup.status());
+on('PUT', '/api/startup', async (c) => startup.set(!!(c.body && c.body.enabled)));
 on('PUT', '/api/settings', async (c) => {
   const b = c.body;
   if (b.lang === 'ru' || b.lang === 'en') store.config.lang = b.lang;
@@ -197,8 +201,19 @@ on('POST', '/api/capacity/auto', async () => {
 });
 
 const netaccess = require('./lib/netaccess');
+const startup = require('./lib/startup');
 const netname = require('./lib/netname');
-on('GET', '/api/network', async () => ({ hostname: require('os').hostname(), suffix: netname.SUFFIX, addresses: netaccess.addresses(), windows: process.platform === 'win32', beta: store.config.beta }));
+on('GET', '/api/network', async () => {
+  const addresses = netaccess.addresses();
+  const primary = addresses.find((a) => a.primary);
+  const entries = netaccess.readHosts();
+  const hosts = {};
+  if (primary) {
+    hosts[primary.fqdn] = netaccess.hostsState(primary.fqdn, primary.ip, entries);
+    for (const s of store.state.servers) if (s.netName) hosts[s.netName] = netaccess.hostsState(s.netName, primary.ip, entries);
+  }
+  return { hostname: require('os').hostname(), suffix: netname.SUFFIX, addresses, windows: process.platform === 'win32', beta: store.config.beta, hosts, lastIp: (store.config.net || {}).lastIp || '' };
+});
 on('GET', '/api/network/resolve', async (c) => {
   try {
     const ip = netname.nameToIp(c.query.get('name') || '');
@@ -211,7 +226,8 @@ on('GET', '/api/servers/:id/reach', async (c) => {
   const s = mgr.rec(c.params.id);
   const state = mgr.view(s).state;
   const r = await netaccess.reach(catalog.portsOf(s.game, s.settings), ['running', 'starting'].includes(state));
-  return { state, ...r };
+  const fw = await netaccess.firewallState(netaccess.firewallRules(s.name, catalog.portsOf(s.game, s.settings)));
+  return { state, ...r, firewall: fw };
 });
 on('POST', '/api/servers/:id/firewall', async (c) => {
   const s = mgr.rec(c.params.id);
@@ -848,7 +864,7 @@ async function bindPort() {
 
 async function start() {
   applog.init(store.paths.data);
-  const wantWindow = process.env.NO_BROWSER !== '1' && (process.pkg || process.env.HEARTH_APP === '1');
+  const wantWindow = process.env.NO_BROWSER !== '1' && !process.argv.includes('--startup') && (process.pkg || process.env.HEARTH_APP === '1');
   const profile = path.join(store.paths.data, 'app-profile');
   const lock = readLock();
   if (lock && lock.pid !== process.pid && pidAlive(lock.pid) && (await pingHearth(lock.port))) {
@@ -876,6 +892,7 @@ async function start() {
     if (GUI && r.mode === 'none') messageBox('Не удалось открыть окно Hearth. Установите Microsoft Edge или Google Chrome и запустите Hearth снова.\n\nАдрес панели: ' + url, 'Hearth', 'OK', 'Warning').then(() => shutdown());
   }
   sched.start();
+  netwatch.start();
   restartRelay();
   if (process.env.AUTOSTART !== '0') {
     for (const sv of store.state.servers) if (sv.autostart) mgr.start(sv.id).catch(() => {});
