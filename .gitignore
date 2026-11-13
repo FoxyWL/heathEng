@@ -1,8 +1,7 @@
 node_modules/
-dist/
+dist/win-unpacked/
 data/
 core/target/
-build/node-win-x64.exe
 *.log
 build/hearth-core
 build/_el/
