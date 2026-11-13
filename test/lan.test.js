@@ -61,7 +61,7 @@ function friend(hostsLines, name, port) {
   ok('второй ПК создан: друг 10.88.0.2 ↔ хозяин 10.88.0.1 по veth');
 
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hearth-landata-'));
-  agent = spawn('node', [path.join(root, 'main.js')], { env: { ...process.env, DATA_DIR: data, PORT, NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_STATS_MS: '500', HEARTH_NETWATCH_MS: '400', HEARTH_NETWATCH_GRACE_MS: '0' }, stdio: ['ignore', 'pipe', 'inherit'] });
+  agent = spawn('node', [path.join(root, 'main.js')], { env: { ...process.env, DATA_DIR: data, PORT, NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_STATS_MS: '500', HEARTH_NETWATCH_MS: '400', HEARTH_NETWATCH_GRACE_MS: '0', HEARTH_NET_IGNORE: '^(eth|ens|enp|wlan)' }, stdio: ['ignore', 'pipe', 'inherit'] });
   let out = '';
   agent.stdout.on('data', (d) => (out += d));
   const api = async (method, p, body) => {

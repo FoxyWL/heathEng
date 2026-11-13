@@ -90,4 +90,4 @@ class NetWatch {
   }
 }
 
-module.exports = { NetWatch, FAILS };
+module.exports = { NetWatch };

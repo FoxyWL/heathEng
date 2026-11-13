@@ -138,6 +138,20 @@ fs.writeFileSync(listen, "const net=require('net');net.createServer((s)=>{s.on('
     ok('hosts: состояния ok / stale / missing, чужие строки не трогаются; автозапуск вне Windows честно «не поддерживается»');
   }
 
+  // ---- приоритеты адресов: проводная сеть, Wi-Fi, виртуальные и VPN в конце, закреплённый адрес первым
+  {
+    const mk = (ip, iface, virtual = false) => ({ ip, iface, kind: na.kindOf(ip), virtual });
+    const list = () => [mk('172.20.0.1', 'vEthernet (WSL)', true), mk('192.168.1.40', 'Wi-Fi'), mk('100.64.3.3', 'Ethernet'), mk('192.168.1.10', 'Ethernet'), mk('10.8.0.2', 'NordLynx VPN', true), mk('169.254.5.5', 'Ethernet 2')];
+    let r = na.rankAddresses(list());
+    assert.deepStrictEqual(r.map((x) => x.ip), ['192.168.1.10', '100.64.3.3', '169.254.5.5', '192.168.1.40', '172.20.0.1', '10.8.0.2'], r.map((x) => x.ip).join(' '));
+    assert(r[0].primary && r.filter((x) => x.primary).length === 1);
+    r = na.rankAddresses(list(), '192.168.1.40');
+    assert(r[0].ip === '192.168.1.40' && r[0].pinned && r.filter((x) => x.primary).length === 1);
+    r = na.rankAddresses(list(), '8.8.8.8');
+    assert(r[0].ip === '192.168.1.10' && !r[0].pinned, 'закреплённого адреса уже нет: автовыбор');
+    ok('приоритет адресов: проводная сеть → Wi-Fi → виртуальные и VPN; адрес провайдера (CGNAT) ниже домашнего; закреплённый всегда первый');
+  }
+
   // ---- приложение
   const data = fs.mkdtempSync(path.join(os.tmpdir(), 'hearth-netdata-'));
   const agent = spawn('node', [path.join(root, 'main.js')], { env: { ...process.env, DATA_DIR: data, PORT, NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_STATS_MS: '500' }, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -211,6 +225,15 @@ fs.writeFileSync(listen, "const net=require('net');net.createServer((s)=>{s.on('
     assert(hs.line.startsWith(lan.ip + ' ' + lan.fqdn));
     for (const bad of ['127.0.0.1', '0.0.0.0', 'abc', '1.2.3']) assert.strictEqual((await api('POST', '/api/network/hosts', { ip: bad })).s, 400, bad);
     ok('hosts: строка собирается верно, loopback и мусор отклоняются');
+
+    const pinList = (await api('GET', '/api/network')).j.addresses;
+    assert.strictEqual((await api('PUT', '/api/network/preferred', { ip: '8.8.4.4' })).s, 400);
+    assert.strictEqual((await api('PUT', '/api/network/preferred', { ip: pinList[0].ip })).j.preferred, pinList[0].ip);
+    const pinned = (await api('GET', '/api/network')).j;
+    assert(pinned.preferred === pinList[0].ip && pinned.addresses[0].pinned);
+    await api('PUT', '/api/network/preferred', { ip: '' });
+    assert.strictEqual((await api('GET', '/api/network')).j.preferred, '');
+    ok('закрепление адреса основным: чужой адрес отклоняется, сброс возвращает автовыбор');
 
     // ---- своё имя сервера: всем .hearth, свои зоны только в бете (администратор)
     const SA = (await api('POST', '/api/servers', { game: 'custom', name: 'A', settings: { command: 'node -e 0', port: 15701 } })).j;

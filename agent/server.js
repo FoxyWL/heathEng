@@ -5,7 +5,13 @@ const path = require('path');
 const { spawn } = require('child_process');
 const store = require('./lib/store');
 const catalog = require('./lib/catalog');
+const netaccess = require('./lib/netaccess');
+const netname = require('./lib/netname');
+const startup = require('./lib/startup');
+const icons = require('./lib/icons');
+const relaydisc = require('./lib/relaydisc');
 const { NetWatch } = require('./lib/netwatch');
+const { PublicAccess } = require('./lib/publicaccess');
 const files = require('./lib/files');
 const ai = require('./lib/ai');
 const { Manager } = require('./lib/procman');
@@ -19,7 +25,9 @@ const modrinth = require('./lib/modrinth');
 
 const BIND = process.env.BIND || '127.0.0.1';
 const WEB = path.join(__dirname, '..', 'web');
-const VERSION = '1.3.1';
+const VERSION = '1.4.0';
+// Крючки для оболочки (Electron): системные окна и папки вместо запуска внешних программ.
+const hooks = { openExternal: null, openPath: null };
 const GUI = isGuiExe(); // установленная версия без окна консоли
 let PORT = 0;
 let appMode = false;
@@ -33,7 +41,9 @@ function emit(type, payload) {
 }
 
 const mgr = new Manager(emit);
+netaccess.setPreferenceSource(() => (store.config.net || {}).preferred || '');
 const netwatch = new NetWatch({ mgr, emit, store });
+const pub = new PublicAccess({ mgr, store, emit });
 const sched = new Scheduler(mgr, emit);
 const tunnel = new TunnelClient();
 const lab = (o) => (o && typeof o === 'object' ? o.ru || o.en : o || '');
@@ -98,6 +108,39 @@ function restartRelay() {
 }
 
 let tunRev = 0;
+
+// Автоопределение релея при запуске. Открытый релей подключается сам; релею с токеном нужен токен: предлагаем найденное панели.
+async function relayAuto() {
+  const r = store.config.relay;
+  if (r.host || r.autoDiscover === false || process.env.HEARTH_RELAY_AUTO === '0') return;
+  const found = await relaydisc.discover({ extra: r.known || [] }).catch(() => []);
+  if (!found.length || store.config.relay.host) return;
+  const f = found[0];
+  if (found.length === 1 && !f.tokenRequired) {
+    Object.assign(r, { host: f.host, port: f.port, srvName: f.name, token: '', enabled: true });
+    store.saveConfig();
+    restartRelay();
+    emit('relay-found', { ...f, connected: true });
+  } else emit('relay-found', { ...f, connected: false, count: found.length });
+  lastFound = f;
+}
+let lastFound = null;
+
+// Релей на локальной сети сменил адрес: находим его по имени и обновляем
+let relayDown = 0;
+setInterval(async () => {
+  const r = store.config.relay;
+  if (!r.enabled || !r.host || !r.srvName) return (relayDown = 0);
+  if (tunnel.status === 'online') return (relayDown = 0);
+  if (++relayDown < 3) return;
+  relayDown = 0;
+  const f = (await relaydisc.discover({ extra: r.known || [] }).catch(() => [])).find((x) => x.name === r.srvName && (x.host !== r.host || x.port !== r.port));
+  if (!f) return;
+  Object.assign(r, { host: f.host, port: f.port });
+  store.saveConfig();
+  restartRelay();
+  emit('relay-found', { ...f, connected: true, moved: true });
+}, +process.env.HEARTH_RELAY_RECHECK_MS || 30000).unref();
 function tunnelView() {
   const names = new Map();
   for (const s of store.state.servers) for (const p of serverPorts(s)) names.set(p.id, { s, p });
@@ -105,7 +148,7 @@ function tunnelView() {
   const r = store.config.relay;
   return {
     rev: ++tunRev,
-    relay: { enabled: !!r.enabled, host: r.host, port: +r.port || 7000, name: r.name, hasToken: !!r.token, status: tunnel.status, error: tunnel.error || '', latency: tunnel.latency || 0 },
+    relay: { enabled: !!r.enabled, host: r.host, port: +r.port || 7000, name: r.name, srvName: r.srvName || '', autoDiscover: r.autoDiscover !== false, hasToken: !!r.token, status: tunnel.status, error: tunnel.error || '', latency: tunnel.latency || 0 },
     tunnels: tunnel.list().map((t) => {
       const m = names.get(t.id);
       const e = ext.get(t.id);
@@ -200,9 +243,6 @@ on('POST', '/api/capacity/auto', async () => {
   return mgr.cap.view();
 });
 
-const netaccess = require('./lib/netaccess');
-const startup = require('./lib/startup');
-const netname = require('./lib/netname');
 on('GET', '/api/network', async () => {
   const addresses = netaccess.addresses();
   const primary = addresses.find((a) => a.primary);
@@ -212,7 +252,16 @@ on('GET', '/api/network', async () => {
     hosts[primary.fqdn] = netaccess.hostsState(primary.fqdn, primary.ip, entries);
     for (const s of store.state.servers) if (s.netName) hosts[s.netName] = netaccess.hostsState(s.netName, primary.ip, entries);
   }
-  return { hostname: require('os').hostname(), suffix: netname.SUFFIX, addresses, windows: process.platform === 'win32', beta: store.config.beta, hosts, lastIp: (store.config.net || {}).lastIp || '' };
+  return { preferred: (store.config.net || {}).preferred || '', hostname: require('os').hostname(), suffix: netname.SUFFIX, addresses, windows: process.platform === 'win32', beta: store.config.beta, hosts, lastIp: (store.config.net || {}).lastIp || '' };
+});
+// Закрепить адрес основным (например, проводной вместо Wi-Fi) или вернуть автовыбор
+on('PUT', '/api/network/preferred', async (c) => {
+  const ip = String((c.body && c.body.ip) || '').trim();
+  if (ip && !netaccess.addresses('').some((a) => a.ip === ip)) throw Object.assign(new Error('такого адреса у этого ПК нет'), { status: 400 });
+  store.config.net.preferred = ip;
+  store.saveConfig();
+  netwatch.checkIp();
+  return { preferred: ip };
 });
 on('GET', '/api/network/resolve', async (c) => {
   try {
@@ -295,6 +344,44 @@ on('PUT', '/api/servers/:id/netname', async (c) => {
   return { ...mgr.update(s.id, {}), host, port, restartRequired: restart };
 });
 
+// Значки игр: отдают картинку или 404 (тогда панель рисует свою плитку)
+const sendIcon = (res, ic) => {
+  res.writeHead(200, { 'content-type': ic.mime, 'cache-control': 'private, max-age=86400' });
+  fs.createReadStream(ic.file).pipe(res);
+};
+on('GET', '/api/games/:game/icon', async (c) => ({ __icon: await icons.forGame(c.params.game) }));
+on('GET', '/api/servers/:id/icon', async (c) => ({ __icon: await icons.forServer(mgr.rec(c.params.id)) }));
+on('PUT', '/api/servers/:id/icon', async (c) => {
+  const s = mgr.rec(c.params.id);
+  const b = c.body || {};
+  if (b.steamApp !== undefined) await icons.setFromSteam(s.id, +b.steamApp);
+  else {
+    const m = /^data:image\/[a-z+.-]+;base64,(.+)$/i.exec(String(b.dataUrl || ''));
+    if (!m) throw Object.assign(new Error('нужна картинка (dataUrl) или номер игры в Steam'), { status: 400 });
+    icons.setCustom(s.id, Buffer.from(m[1], 'base64'));
+  }
+  s.iconRev = (s.iconRev || 0) + 1;
+  store.saveState();
+  return mgr.update(s.id, {});
+});
+on('DELETE', '/api/servers/:id/icon', async (c) => {
+  const s = mgr.rec(c.params.id);
+  icons.clearCustom(s.id);
+  s.iconRev = (s.iconRev || 0) + 1;
+  store.saveState();
+  return mgr.update(s.id, {});
+});
+on('GET', '/api/icons/search', async (c) => icons.searchSteam(c.query.get('term')));
+
+// Доступ из интернета напрямую (UPnP): проверка и открытие портов сервера одной кнопкой
+on('GET', '/api/public', async () => pub.check());
+on('POST', '/api/servers/:id/public', async (c) => {
+  const s = mgr.rec(c.params.id);
+  if (c.body && c.body.enabled === false) await pub.close(s);
+  else await pub.open(s);
+  return mgr.update(s.id, {});
+});
+
 on('GET', '/api/catalog', async () => catalog.describe());
 on('GET', '/api/catalog/:game/versions', async (c) => {
   const g = catalog.games[c.params.game];
@@ -307,8 +394,10 @@ on('POST', '/api/servers', async (c) => mgr.create(c.body));
 on('GET', '/api/servers/:id', async (c) => mgr.view(mgr.rec(c.params.id)));
 on('PATCH', '/api/servers/:id', async (c) => mgr.update(c.params.id, c.body));
 on('DELETE', '/api/servers/:id', async (c) => {
-  await mgr.remove(c.params.id, c.query.get('files') === '1');
-  return { ok: true };
+  await pub.close(mgr.rec(c.params.id)).catch(() => {});
+  const report = await mgr.remove(c.params.id, c.query.get('files') === '1');
+  syncTunnels();
+  return { ok: true, ...report };
 });
 on('POST', '/api/servers/:id/start', async (c) => mgr.start(c.params.id));
 on('POST', '/api/servers/:id/stop', async (c) => mgr.stop(c.params.id));
@@ -399,6 +488,33 @@ on('PUT', '/api/relay', async (c) => {
   if (typeof b.enabled === 'boolean') r.enabled = b.enabled;
   store.saveConfig();
   restartRelay();
+  return tunnelView();
+});
+// Автопоиск релея: на этом ПК, в локальной сети и среди известных адресов
+on('GET', '/api/relay/discover', async () => {
+  const r = store.config.relay;
+  return { found: await relaydisc.discover({ extra: r.known || [] }), configured: !!r.host };
+});
+// Подключение к найденному релею или по ссылке-приглашению: одно действие вместо трёх полей
+on('POST', '/api/relay/connect', async (c) => {
+  const b = c.body || {};
+  const p = b.link ? badRequest(() => relaydisc.parseLink(b.link)) : badRequest(() => relaydisc.parseLink(`${b.host || ''}${b.port ? ':' + b.port : ''}`));
+  const token = String(b.token || p.token || '').trim();
+  if (!(await relaydisc.reachable(p.host, p.port))) throw Object.assign(new Error(`релей ${p.host}:${p.port} не отвечает. Проверьте адрес и что порт открыт`), { status: 502 });
+  const r = store.config.relay;
+  Object.assign(r, { host: p.host, port: p.port, srvName: b.name || p.name || r.srvName });
+  const needToken = b.tokenRequired !== false && !token && !p.token;
+  if (token) r.token = token;
+  else if (b.tokenRequired === false) r.token = '';
+  r.enabled = !needToken;
+  store.saveConfig();
+  restartRelay();
+  return { ...tunnelView(), needToken };
+});
+on('GET', '/api/relay/found', async () => lastFound);
+on('PUT', '/api/relay/auto', async (c) => {
+  store.config.relay.autoDiscover = !!(c.body && c.body.enabled);
+  store.saveConfig();
   return tunnelView();
 });
 on('POST', '/api/tunnels', async (c) => {
@@ -636,13 +752,17 @@ on('POST', '/api/quit', async () => {
 on('POST', '/api/open-url', async (c) => {
   const url = String((c.body && c.body.url) || '');
   if (!require('./lib/sources').allowed(url)) throw Object.assign(new Error('эту ссылку открыть нельзя'), { status: 400 });
-  if (process.env.HEARTH_NO_OPEN !== '1') require('./lib/appwindow').openInDefaultBrowser(url);
+  if (process.env.HEARTH_NO_OPEN !== '1') {
+    if (hooks.openExternal) hooks.openExternal(url);
+    else require('./lib/appwindow').openInDefaultBrowser(url);
+  }
   return { ok: true, url };
 });
 on('POST', '/api/servers/:id/open-folder', async (c) => {
   const dir = mgr.rec(c.params.id).dir;
   if (!fs.existsSync(dir)) throw Object.assign(new Error('папка не найдена: ' + dir), { status: 404 });
-  if (process.env.HEARTH_NO_OPEN !== '1') {
+  if (process.env.HEARTH_NO_OPEN !== '1' && hooks.openPath) hooks.openPath(dir);
+  else if (process.env.HEARTH_NO_OPEN !== '1') {
     const cmd = process.platform === 'win32' ? ['explorer.exe', [dir]] : process.platform === 'darwin' ? ['open', [dir]] : ['xdg-open', [dir]];
     try {
       require('child_process').spawn(cmd[0], cmd[1], { stdio: 'ignore', detached: true }).on('error', () => {}).unref();
@@ -745,6 +865,10 @@ const server = http.createServer(async (req, res) => {
       const params = {};
       for (const [k, v] of Object.entries(m.groups || {})) params[k] = decodeURIComponent(v);
       const out = await r.fn({ params, query: url.searchParams, body });
+      if (out && Object.prototype.hasOwnProperty.call(out, '__icon')) {
+        if (!out.__icon) return json(res, 404, { error: 'значка нет' });
+        return sendIcon(res, out.__icon);
+      }
       return json(res, 200, out === undefined ? { ok: true } : out);
     } catch (e) {
       const code = e.code === 'ENOENT' ? 404 : e.status || 500;
@@ -796,7 +920,7 @@ function onWindowGone() {
           if (ans === 'No') shutdown();
         });
       } else {
-        console.log('  Запустите hearth.exe ещё раз, чтобы открыть окно, или закройте это окно консоли, чтобы остановить всё.\n');
+        console.log('  Запустите Hearth ещё раз, чтобы открыть окно, или закройте это окно консоли, чтобы остановить всё.\n');
       }
     } else {
       console.log('\n  Окно закрыто — выход.');
@@ -864,11 +988,12 @@ async function bindPort() {
 
 async function start() {
   applog.init(store.paths.data);
-  const wantWindow = process.env.NO_BROWSER !== '1' && !process.argv.includes('--startup') && (process.pkg || process.env.HEARTH_APP === '1');
+  const wantWindow = process.env.NO_BROWSER !== '1' && !process.argv.includes('--startup') && process.env.HEARTH_APP === '1';
   const profile = path.join(store.paths.data, 'app-profile');
   const lock = readLock();
   if (lock && lock.pid !== process.pid && pidAlive(lock.pid) && (await pingHearth(lock.port))) {
     const url = `http://127.0.0.1:${lock.port}/#token=${store.config.panelToken}`;
+    if (require('./lib/runtime').electron) return { already: true, url };
     console.log('\n  Hearth уже запущен — открываю его окно.\n');
     if (wantWindow) openAppWindow(url, profile);
     setTimeout(() => process.exit(0), 1200);
@@ -893,10 +1018,13 @@ async function start() {
   }
   sched.start();
   netwatch.start();
+  pub.start();
   restartRelay();
+  relayAuto();
   if (process.env.AUTOSTART !== '0') {
     for (const sv of store.state.servers) if (sv.autostart) mgr.start(sv.id).catch(() => {});
   }
+  return { url, port: PORT, already: false };
 }
 
 process.on('exit', () => {
@@ -906,7 +1034,7 @@ process.on('exit', () => {
   } catch {}
 });
 
-module.exports = { start };
+module.exports = { start, shutdown, hooks, dataDir: store.paths.data, running: () => mgr.runningCount() };
 if (require.main === module) {
   start().catch((e) => {
     console.error('[hearth] ' + e.message);

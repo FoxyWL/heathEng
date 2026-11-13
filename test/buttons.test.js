@@ -492,6 +492,7 @@ async function main() {
     await page.waitForSelector('.page h1:has-text("Туннели")');
   });
   await step('tunnels: "Сохранить и подключиться" -> connected', async () => {
+    await page.click('details:has-text("Ввести адрес вручную") summary');
     await page.fill('input[placeholder="relay.example.com"]', '127.0.0.1');
     await page.fill('input[type=number] >> nth=0', '17021');
     await page.fill('input[type=password]', 'rt');

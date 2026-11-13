@@ -11,7 +11,7 @@ let lastLog = '';
 function logFatal(err) {
   const text = `[${new Date().toISOString()}] ${err && err.stack ? err.stack : err}\n`;
   let where = '';
-  for (const dir of [process.env.DATA_DIR, process.pkg ? path.join(path.dirname(process.execPath), 'data') : path.join(process.cwd(), 'data'), os.tmpdir()]) {
+  for (const dir of [process.env.DATA_DIR, path.join(process.cwd(), 'data'), os.tmpdir()]) {
     if (!dir) continue;
     try {
       fs.mkdirSync(dir, { recursive: true });
@@ -36,7 +36,7 @@ function holdWindow(err) {
     messageBox('Hearth не смог запуститься:\n\n' + msg + (lastLog ? '\n\nПодробности: ' + lastLog : ''), 'Hearth', 'OK', 'Error').then(() => process.exit(1));
     return;
   }
-  if (!process.pkg || !process.stdin.isTTY) return process.exit(1);
+  if (!process.stdin.isTTY) return process.exit(1);
   console.error('\n  Нажмите Enter, чтобы закрыть это окно.');
   process.stdin.resume();
   process.stdin.once('data', () => process.exit(1));

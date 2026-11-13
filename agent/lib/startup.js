@@ -13,7 +13,7 @@ const reg = (args) => new Promise((resolve) => {
 });
 
 /** Только в собранном exe: из исходников process.execPath указывал бы на node. */
-const supported = () => isWin() && !!process.pkg;
+const supported = () => isWin() && require('./runtime').packed;
 
 async function status() {
   if (!supported()) return { supported: false, enabled: false };

@@ -1,5 +1,6 @@
 'use strict';
 // @imports:start
+import { iconSection } from './iconpick.js';
 import { icon } from './icons.js';
 import { T, api, askChoice, askConfirm, click, h, lab, toast, withBusy } from './lib.js';
 import { doAction, renderHeader, renderInvite } from './server.js';
@@ -88,15 +89,16 @@ export function settingsTab() {
     } else {
       const c = await askChoice({
         title: T(`Удалить «${s.name}»?`, `Remove “${s.name}”?`),
-        text: T('Файлы сервера и мир можно удалить вместе с ним или оставить на диске.', 'You can delete the server files and the world with it, or keep them on disk.'),
+        text: T('«Удалить с файлами» сотрёт папку сервера, мир, бэкапы и расписание. Это нельзя отменить. Можно оставить файлы на диске.', '“Delete with files” erases the server folder, the world, backups and schedule. This cannot be undone. You can keep the files on disk instead.'),
         buttons: [{ label: T('Отмена', 'Cancel'), value: 'cancel', focus: true }, { label: T('Оставить файлы', 'Keep files'), value: 'keep' }, { label: T('Удалить с файлами', 'Delete with files'), value: 'files', kind: 'danger' }],
       });
       if (c === 'cancel') return;
       files = c === 'files';
     }
     await withBusy(remove, async () => {
-      await api('DELETE', `/api/servers/${s.id}${files ? '?files=1' : ''}`);
-      toast(T('Сервер удалён', 'Server removed'));
+      const r = await api('DELETE', `/api/servers/${s.id}${files ? '?files=1' : ''}`);
+      if (r.leftover && r.leftover.length) toast(T(`Сервер удалён, но часть файлов занята и осталась: ${r.leftover.join(', ')}`, `Server removed, but some files are in use and remain: ${r.leftover.join(', ')}`), true);
+      else toast(files ? T(`Сервер удалён вместе с файлами (освобождено ${r.freedMb} МБ)`, `Server and its files removed (${r.freedMb} MB freed)`) : T('Сервер удалён', 'Server removed'));
     });
   });
   const portsBox = ports.length > 1
@@ -119,6 +121,7 @@ export function settingsTab() {
         h('div', { class: 'field' }, h('label', {}, T('Поддомен (для HTTP)', 'Subdomain (HTTP)'), tSub)),
         h('div', { class: 'field' }, h('label', {}, T('Желаемый внешний порт', 'Preferred public port'), tPort)))),
     h('div', { class: 'savebar' }, save),
+    iconSection(s),
     h('div', { class: 'sect' },
       h('h3', {}, T('Папка и удаление', 'Folder and removal')),
       h('p', { class: 'mono muted' }, s.dir),

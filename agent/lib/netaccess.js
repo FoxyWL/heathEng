@@ -18,20 +18,42 @@ function kindOf(ip) {
 
 const VIRTUAL = /vethernet|vmware|virtualbox|vbox|docker|wsl|hyper-v|loopback|tailscale|zerotier|vpn|tap-|tun|br-|veth/i;
 
-/** IPv4-адреса этого ПК. Первым идёт тот, которым чаще всего пользуются в домашней сети. */
-function addresses() {
+const WIRED = /ethernet|^eth\d|^en[opsx]|local area|локальной сети/i;
+const WIFI = /wi-?fi|wlan|wireless|^wl|беспровод/i;
+let preferredSource = () => '';
+/** Откуда брать закреплённый пользователем адрес (задаёт server.js). */
+const setPreferenceSource = (fn) => {
+  preferredSource = fn;
+};
+
+/**
+ * Порядок адресов: закреплённый пользователем, затем проводная сеть, Wi-Fi, остальное; виртуальные и VPN-адаптеры (Docker, Hyper-V, WSL, VPN) в конце.
+ * Внутри группы: домашняя сеть, внешний адрес, адрес провайдера (CGNAT), 169.254. Первый получает метку primary.
+ */
+function rankAddresses(list, preferred = '') {
+  const group = (x) => (x.virtual ? 5 : WIRED.test(x.iface) ? 0 : WIFI.test(x.iface) ? 1 : 2);
+  const rank = (x) => (preferred && x.ip === preferred ? -10 : group(x) * 4 + { private: 0, public: 1, cgnat: 2, linklocal: 3 }[x.kind]);
+  const out = [...list].sort((a, b) => rank(a) - rank(b));
+  for (const x of out) delete x.primary;
+  if (out.length) out[0].primary = true;
+  if (out.length) out[0].pinned = !!(preferred && out[0].ip === preferred);
+  return out;
+}
+
+/** IPv4-адреса этого ПК в порядке приоритета. */
+function addresses(preferred = preferredSource()) {
   const out = [];
+  // HEARTH_NET_IGNORE: регулярное выражение с именами сетевых карт, которые не учитывать (для тестов и диагностики)
+  const ignore = process.env.HEARTH_NET_IGNORE ? new RegExp(process.env.HEARTH_NET_IGNORE) : null;
   for (const [iface, list] of Object.entries(os.networkInterfaces())) {
+    if (ignore && ignore.test(iface)) continue;
     for (const a of list || []) {
       if (a.family !== 'IPv4' || a.internal) continue;
       const kind = kindOf(a.address);
       out.push({ ip: a.address, iface, kind, virtual: VIRTUAL.test(iface), name: ipToName(a.address), fqdn: fqdn(a.address) });
     }
   }
-  const rank = (x) => (x.virtual ? 5 : 0) + { private: 0, public: 1, cgnat: 2, linklocal: 3 }[x.kind];
-  out.sort((x, y) => rank(x) - rank(y));
-  if (out.length) out[0].primary = true;
-  return out;
+  return rankAddresses(out, preferred);
 }
 
 function probeTcp(host, port, ms = 900) {
@@ -139,4 +161,4 @@ function firewallState(rules) {
   return Promise.all(rules.map(one)).then((r) => (r.includes(null) ? 'unknown' : r.every(Boolean) ? 'present' : 'missing'));
 }
 
-module.exports = { readHosts, hostsState, firewallState, addresses, probeTcp, reach, firewallRules, netshAdd, netshDel, elevated, elevatedCommand, hostsCommands, hostsLine, hostsPath, kindOf, SUFFIX };
+module.exports = { rankAddresses, setPreferenceSource, readHosts, hostsState, firewallState, addresses, reach, firewallRules, netshAdd, netshDel, elevated, elevatedCommand, hostsCommands, hostsLine, hostsPath, kindOf, SUFFIX };

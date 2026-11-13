@@ -3,6 +3,7 @@
 import { dual, fmtRate, spark } from './charts.js';
 import { icon } from './icons.js';
 import { T, api, click, clock, copy, fmtSize, guard, h, toast, uptime } from './lib.js';
+import { relayFinder } from './relayfind.js';
 import { go, renderMain, renderRail } from './shell.js';
 import { S, fill, setTun, ui } from './state.js';
 // @imports:end
@@ -112,7 +113,8 @@ export function tunnelsPage() {
       h('div', { class: 'cols' },
         h('div', {}, h('h2', {}, T('Активные туннели', 'Active tunnels')), list),
         detailHost),
-      h('details', { class: 'help', open: !r.host }, h('summary', {}, T('Настройки релея', 'Relay settings')),
+      h('div', { class: 'sect' }, h('h3', {}, T('Подключение к релею', 'Connect to a relay')), relayFinder(() => { renderRail(); renderMain(); })),
+      h('details', { class: 'help' }, h('summary', {}, T('Ввести адрес вручную', 'Enter the address manually')),
         h('div', { class: 'form' },
           h('div', { class: 'field' }, h('label', {}, T('Адрес релея', 'Relay host'), host), h('small', {}, T('Домен или IP вашего VPS', 'Domain or IP of your VPS'))),
           h('div', { class: 'field' }, h('label', {}, T('Порт управления', 'Control port'), port)),

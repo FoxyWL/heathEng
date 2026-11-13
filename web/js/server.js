@@ -65,7 +65,7 @@ function resources(s) {
 }
 
 // Шапка перерисовывается, только если изменилось то, что на ней видно: иначе нажатие на кнопку могло бы потеряться
-const headSig = (s) => [s.name, s.state, s.msg, s.pct, s.players, (s.playerNames || []).join(','), s.maxPlayers, Math.round((s.mem || 0) / 4), s.cpu == null ? '' : Math.round(s.cpu / 5), s.memLimit, s.pid, s.startedAt ? Math.floor((Date.now() - s.startedAt) / 60000) : '', s.version].join('|');
+const headSig = (s) => [s.name, s.state, s.msg, s.pct, s.players, (s.playerNames || []).join(','), s.maxPlayers, Math.round((s.mem || 0) / 4), s.cpu == null ? '' : Math.round(s.cpu / 5), s.memLimit, s.pid, s.startedAt ? Math.floor((Date.now() - s.startedAt) / 60000) : '', s.version, s.iconRev].join('|');
 
 export function renderHeader() {
   const s = cur();
@@ -94,7 +94,7 @@ export function renderHeader() {
     h('span', { class: 'lamp ' + s.state }),
     h('span', { class: 'badge ' + s.state }, st[s.state] || s.state),
     ['crashed', 'error'].includes(s.state) && s.msg ? h('span', {}, s.msg) : null,
-    gameBadge(s.game, 'sm'),
+    gameBadge(s.game, 'sm', s.id, s.iconRev),
     h('span', {}, `${gameName(s.game)}${s.version && s.version !== 'custom' ? ' ' + s.version : ''}`),
   ];
   const progress = s.state === 'installing'
@@ -125,7 +125,7 @@ export function renderInvite() {
   const extra = mine.filter((x) => x !== t);
   const lan = S.net && S.net.addresses.find((x) => x.primary);
   const lanPort = lan && portOf(s);
-  const sig = JSON.stringify([s.id, s.game, s.tunnel.enabled, r.enabled, r.host, r.status, r.error, lan && lan.ip, lanPort, s.netName, mine.map((x) => [x.id, x.info && x.info.url, x.error, x.name])]);
+  const sig = JSON.stringify([s.id, s.game, s.tunnel.enabled, r.enabled, r.host, r.status, r.error, lan && lan.ip, lanPort, s.netName, s.publicIp && s.publicIp.ext, s.publicIp && s.publicIp.error, mine.map((x) => [x.id, x.info && x.info.url, x.error, x.name])]);
   if (ui.inviteSig === sig && ui.invite.firstChild) return;
   ui.inviteSig = sig;
   const row = [h('div', { class: 'lbl' }, T('Адрес для друзей', 'Address for friends'))];
@@ -152,6 +152,11 @@ export function renderInvite() {
     if (t && t.error) row.push(h('div', { class: 'err' }, t.error));
     else if (r.error) row.push(h('div', { class: 'err' }, r.error));
   }
+  const pubRow = s.publicIp && s.publicIp.enabled && lanPort ? h('div', { class: 'invite lan' },
+    h('div', { class: 'lbl' }, T('Из интернета', 'From the internet')),
+    h('div', { class: 'addr' }, `${s.publicIp.ext}:${lanPort}`),
+    h('button', { class: 'btn', on: { click: (e) => copy(`${s.publicIp.ext}:${lanPort}`, e.currentTarget) } }, T('Скопировать', 'Copy')),
+    s.publicIp.error ? h('div', { class: 'err' }, s.publicIp.error) : null) : null;
   const lanRow = lan && lanPort ? h('div', { class: 'invite lan' },
     h('div', { class: 'lbl' }, T('В вашей сети', 'On your network')),
     h('div', { class: 'addr' }, `${s.netName || lan.fqdn}:${lanPort}`),
@@ -159,7 +164,7 @@ export function renderInvite() {
     h('button', { class: 'btn ghost', title: `${lan.ip}:${lanPort}`, on: { click: (e) => copy(`${lan.ip}:${lanPort}`, e.currentTarget) } }, 'IP:порт'),
     h('button', { class: 'btn ghost', on: { click: () => go('network') } }, T('Доступ', 'Access'))) : null;
   const more = extra.length ? h('div', { class: 'invite-more' }, extra.map((x) => addrRow(x, false))) : null;
-  fill(ui.invite, h('div', { class: 'invite' + (fresh ? ' fresh' : '') }, row), lanRow, more, howto ? h('p', { class: 'howto' }, howto) : null);
+  fill(ui.invite, h('div', { class: 'invite' + (fresh ? ' fresh' : '') }, row), lanRow, pubRow, more, howto ? h('p', { class: 'howto' }, howto) : null);
 }
 
 export function tabList(s) {

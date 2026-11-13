@@ -104,6 +104,8 @@ class Manager {
       autostart: !!s.autostart,
       tunnel: s.tunnel,
       netName: s.netName || '',
+      iconRev: s.iconRev || 0,
+      publicIp: s.publicIp || { enabled: false },
       state: r.state,
       msg: r.msg,
       pct: r.pct,
@@ -480,20 +482,49 @@ class Manager {
     r.child.stdin.write(text + '\n');
   }
 
+  /**
+   * Удаляет сервер из Hearth. С deleteFiles стирает и остатки: папку сервера, бэкапы, расписание, свои туннели.
+   * Папку, подключённую по пути (imported), Hearth не трогает: она не копировалась и принадлежит пользователю.
+   * Возвращает отчёт: что удалено, что осталось на диске и сколько места освобождено.
+   */
   async remove(id, deleteFiles) {
     const s = this.rec(id);
     const r = this._rt(id);
-    if (r.child) {
-      r.userStop = true;
-      this._terminate(r.child, true);
-    }
     clearTimeout(r.timers.restart);
+    r.userStop = true;
+    if (r.child) {
+      const child = r.child;
+      const gone = new Promise((resolve) => child.once('exit', resolve));
+      this._terminate(child, true);
+      await Promise.race([gone, new Promise((resolve) => setTimeout(resolve, 15000))]); // на Windows файлы заняты, пока процесс жив
+    }
     store.state.servers = store.state.servers.filter((x) => x.id !== id);
     store.state.tasks = store.state.tasks.filter((t) => t.serverId !== id);
+    store.state.tunnels = (store.state.tunnels || []).filter((t) => t.serverId !== id);
     store.saveState();
     this.rt.delete(id);
-    if (deleteFiles && !s.imported) fs.rmSync(s.dir, { recursive: true, force: true });
+    require('./icons').clearCustom(id);
+    const report = { deleted: [], kept: [], leftover: [], freedMb: 0 };
+    if (s.imported) report.kept.push(s.dir);
+    if (deleteFiles) {
+      const targets = [];
+      if (!s.imported) targets.push(s.dir);
+      targets.push(path.join(store.paths.backups, id));
+      for (const dir of targets) {
+        if (!fs.existsSync(dir)) continue;
+        const mb = dirSizeMb(dir);
+        try {
+          fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+        } catch {}
+        if (fs.existsSync(dir)) report.leftover.push(dir);
+        else {
+          report.deleted.push(dir);
+          report.freedMb += mb;
+        }
+      }
+    } else if (!s.imported) report.kept.push(s.dir);
     this.emit('removed', { id });
+    return report;
   }
 
   shutdown() {
@@ -509,6 +540,23 @@ class Manager {
       }
     }
   }
+}
+
+function dirSizeMb(dir) {
+  let total = 0;
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      try {
+        if (e.isDirectory()) walk(p);
+        else total += fs.statSync(p).size;
+      } catch {}
+    }
+  };
+  try {
+    walk(dir);
+  } catch {}
+  return Math.round(total / 1048576);
 }
 
 Manager.revSeq = 0;

@@ -17,11 +17,12 @@ function writable(dir) {
 
 function pickDataDir() {
   if (process.env.DATA_DIR) return path.resolve(process.env.DATA_DIR);
-  const baseDir = process.pkg ? path.dirname(process.execPath) : process.cwd();
+  const packed = require('./runtime').packed;
+  const baseDir = packed ? path.dirname(process.execPath) : process.cwd();
   const appData = process.platform === 'win32' ? path.join(process.env.APPDATA || require('os').homedir(), 'Hearth') : path.join(require('os').homedir(), '.hearth');
   // Установленная версия (файл installed.flag кладёт установщик) хранит данные в профиле пользователя,
   // чтобы они переживали обновление и удаление программы.
-  if (process.pkg && fs.existsSync(path.join(baseDir, 'installed.flag'))) return path.resolve(appData);
+  if (packed && fs.existsSync(path.join(baseDir, 'installed.flag'))) return path.resolve(appData);
   const beside = path.join(baseDir, 'data');
   if (writable(beside)) return beside;
   return path.resolve(appData);
@@ -57,9 +58,9 @@ function writeJson(file, obj) {
 const config = readJson(paths.config, {});
 config.panelToken = config.panelToken || crypto.randomBytes(16).toString('hex');
 config.lang = config.lang || 'ru';
-config.relay = config.relay || { enabled: false, host: '', port: 7000, token: '', name: 'hearth' };
+config.relay = { enabled: false, host: '', port: 7000, token: '', name: 'hearth', autoDiscover: true, srvName: '', ...(config.relay || {}) };
 config.beta = { anyZone: true, ...(config.beta || {}) }; // бета для администратора (пока им считается владелец этого ПК): свои зоны вроде .mc
-config.net = config.net || { lastIp: '' };
+config.net = { lastIp: '', preferred: '', ...(config.net || {}) };
 config.ai = config.ai || { enabled: false, apiKey: '', model: 'claude-sonnet-5-5' };
 
 const state = readJson(paths.state, { servers: [], tasks: [], tunnels: [] });

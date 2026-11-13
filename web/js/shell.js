@@ -43,13 +43,13 @@ const shortGame = (id) => gameName(id).replace(/^Minecraft: Java Edition /, 'MC 
 
 export function renderRail(force) {
   if (!ui.rail) return;
-  const sig = JSON.stringify([S.view, S.sel, S.railMin, lang, S.servers.map((x) => [x.id, x.name, x.state, x.players, x.settings.port, x.game]), S.tun.relay.enabled, S.tun.relay.status]);
+  const sig = JSON.stringify([S.view, S.sel, S.railMin, lang, S.servers.map((x) => [x.id, x.name, x.state, x.players, x.settings.port, x.game, x.iconRev]), S.tun.relay.enabled, S.tun.relay.status]);
   if (!force && ui.railSig === sig && ui.rail.firstChild) return;
   ui.railSig = sig;
   const list = S.servers.length
     ? S.servers.map((s) =>
         h('button', { class: 'srv' + (S.view === 'server' && S.sel === s.id ? ' on' : ''), title: `${s.name} — ${STATE()[s.state] || s.state}`, 'aria-label': s.name, on: { click: () => go('server', s.id) } },
-          S.railMin ? h('span', { class: 'gb-wrap' }, gameBadge(s.game, 'md'), h('span', { class: 'lamp ' + s.state })) : h('span', { class: 'lamp ' + s.state }),
+          S.railMin ? h('span', { class: 'gb-wrap' }, gameBadge(s.game, 'md', s.id, s.iconRev), h('span', { class: 'lamp ' + s.state })) : h('span', { class: 'lamp ' + s.state }),
           S.railMin ? null : h('span', {}, h('b', {}, s.name), h('small', {}, `${shortGame(s.game)} · :${s.settings.port || ''}${s.players != null ? ' · ' + s.players + '👤' : ''}`))))
     : S.railMin ? null : h('div', { class: 'empty-rail' }, T('Серверов пока нет. Нажмите «Новый сервер» внизу.', 'No servers yet. Press “New server” below.'));
   const nav = (view, ico, label, tip, extra) =>

@@ -31,7 +31,7 @@ function card(s) {
   const main = (s.ports && s.ports[0]) || null;
   return h('article', { class: 'card srv-card ' + s.state, 'data-id': s.id },
     h('button', { class: 'card-main', title: T('Открыть сервер', 'Open the server'), on: { click: () => go('server', s.id) } },
-      gameBadge(s.game, 'lg'),
+      gameBadge(s.game, 'lg', s.id, s.iconRev),
       h('span', { class: 'card-title' }, h('b', {}, s.name), h('small', {}, `${gameName(s.game)}${s.version && s.version !== 'custom' ? ' ' + s.version : ''}`)),
       h('span', { class: 'badge ' + s.state }, STATE()[s.state] || s.state)),
     h('div', { class: 'card-stats' },
@@ -56,7 +56,7 @@ export function serversPage() {
   const cache = new Map();
   const sigOf = (s) => {
     const t = S.tun.tunnels.find((x) => x.serverId === s.id && x.id === 'srv-' + s.id);
-    return JSON.stringify([s.name, s.game, s.version, s.state, s.msg, s.pct, s.players, s.maxPlayers, Math.round((s.mem || 0) / 4), s.cpu == null ? '' : Math.round(s.cpu / 5), s.memLimit, t && t.info && t.info.url, s.ports && s.ports[0] && s.ports[0].port]);
+    return JSON.stringify([s.name, s.game, s.version, s.state, s.msg, s.pct, s.players, s.maxPlayers, Math.round((s.mem || 0) / 4), s.cpu == null ? '' : Math.round(s.cpu / 5), s.memLimit, t && t.info && t.info.url, s.ports && s.ports[0] && s.ports[0].port, s.iconRev]);
   };
   const draw = () => {
     const qq = S.q.trim().toLowerCase();

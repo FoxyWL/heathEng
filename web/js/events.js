@@ -105,6 +105,10 @@ export function connectEvents() {
     } catch {}
     hooks.net(ev);
   });
+  on('relay-found', (f) => {
+    S.relayFound = f;
+    hooks.relay(f);
+  });
   on('traffic', onTraffic);
   on('tasks', (v) => {
     S.tasks = v;

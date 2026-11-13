@@ -9,31 +9,10 @@ const { EventEmitter } = require('events');
 const isWin = process.platform === 'win32';
 const EXE = isWin ? 'hearth-core.exe' : 'hearth-core';
 
-function resolveBinary(runtimeDir) {
+function resolveBinary() {
   if (process.env.HEARTH_CORE === 'off') return '';
   if (process.env.HEARTH_CORE && fs.existsSync(process.env.HEARTH_CORE)) return process.env.HEARTH_CORE;
   const root = path.join(__dirname, '..', '..');
-  if (process.pkg) {
-    // Внутри упакованной программы файл лежит в снимке: исполнять его оттуда нельзя, копируем рядом с данными.
-    const src = path.join(root, 'build', 'hearth-core.exe');
-    try {
-      const dst = path.join(runtimeDir, EXE);
-      const want = fs.statSync(src).size;
-      let have = -1;
-      try {
-        have = fs.statSync(dst).size;
-      } catch {}
-      if (have !== want) {
-        fs.mkdirSync(runtimeDir, { recursive: true });
-        const tmp = dst + '.' + process.pid + '.tmp';
-        fs.copyFileSync(src, tmp);
-        fs.renameSync(tmp, dst);
-      }
-      return dst;
-    } catch {
-      return '';
-    }
-  }
   const cands = [path.join(root, 'build', EXE), path.join(root, 'core', 'target', 'release', EXE)];
   return cands.find((p) => fs.existsSync(p)) || '';
 }
@@ -54,7 +33,7 @@ class Core extends EventEmitter {
 
   start() {
     if (this.child) return;
-    const bin = resolveBinary(this.runtimeDir);
+    const bin = resolveBinary();
     if (!bin) return;
     try {
       const c = spawn(bin, ['--interval', String(+process.env.HEARTH_STATS_MS || 2000)], { stdio: ['pipe', 'pipe', 'ignore'], windowsHide: true });
