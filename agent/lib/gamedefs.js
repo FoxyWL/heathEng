@@ -293,4 +293,4 @@ function portsFromText(s) {
   return main.port ? [main, ...more] : more;
 }
 
-module.exports = { steamGames: STEAM.map((d) => [d.id, buildSteam(d)]), terraria, steamCustom, parsePortList, portsFromText, splitArgs, findFile, L };
+module.exports = { steamGames: STEAM.map((d) => [d.id, buildSteam(d)]), terraria, steamCustom, portsFromText, splitArgs, findFile, L };

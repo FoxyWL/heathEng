@@ -19,12 +19,18 @@ const cfg = {
   portMax: +(process.env.PORT_MAX || 29999),
   maxTunnels: +(process.env.MAX_TUNNELS || 16),
   bind: process.env.BIND || '0.0.0.0',
+  discoveryPort: process.env.DISCOVERY_PORT === undefined ? 7001 : +process.env.DISCOVERY_PORT, // 0 — не отвечать на поиск
+  open: process.env.RELAY_OPEN === '1', // без токена: только для домашней или закрытой сети
 };
 
-if (!cfg.token) {
+if (!cfg.token && !cfg.open) {
   cfg.token = crypto.randomBytes(12).toString('hex');
   console.log('[relay] RELAY_TOKEN не задан, сгенерирован: ' + cfg.token);
 }
+const tokenOk = (t) => cfg.open || t === cfg.token;
+
+/** Что релей сообщает о себе тем, кто его ищет (клиентам Hearth). Токен не раскрывается. */
+const about = () => ({ hearthRelay: 1, name: cfg.domain, host: cfg.publicHost, port: cfg.controlPort, tokenRequired: !cfg.open });
 
 const clients = new Set();
 const httpTunnels = new Map();
@@ -109,6 +115,11 @@ function handleHttpSocket(sock) {
     clearTimeout(timer);
     sock.pause();
     const head = buf.toString('latin1', 0, end);
+    if (/^GET \/\.well-known\/hearth-relay[ ?]/.test(head)) {
+      const body = JSON.stringify(about());
+      sock.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\naccess-control-allow-origin: *\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
+      return;
+    }
     const m = /\r\nhost:\s*([^\r\n:]+)/i.exec(head);
     const host = m ? m[1].trim().toLowerCase() : '';
     let sub = '';
@@ -208,7 +219,7 @@ function closeTunnel(client, id) {
 }
 
 function handleControl(sock, hello, rest) {
-  if (hello.token !== cfg.token) {
+  if (!tokenOk(hello.token)) {
     send(sock, { t: 'err', error: 'неверный токен' });
     sock.end();
     return;
@@ -247,7 +258,7 @@ function handleControl(sock, hello, rest) {
 }
 
 function handleData(sock, msg, rest) {
-  if (msg.token !== cfg.token) return sock.destroy();
+  if (!tokenOk(msg.token)) return sock.destroy();
   if (msg.t === 'data') {
     const p = takePending(msg.tid);
     if (!p) return sock.destroy();
@@ -292,6 +303,17 @@ const control = net.createServer((sock) => {
 async function main() {
   await listen(control, cfg.controlPort);
   console.log(`[relay] control :${cfg.controlPort}`);
+  if (cfg.discoveryPort) {
+    const disc = dgram.createSocket({ type: 'udp4', reuseAddr: true });
+    disc.on('error', (e) => console.log('[relay] поиск клиентами выключен: ' + e.message));
+    disc.on('message', (m, r) => {
+      if (m.toString().trim() === 'HEARTH-RELAY?') disc.send(JSON.stringify(about()), r.port, r.address);
+    });
+    disc.bind(cfg.discoveryPort, cfg.bind, () => console.log(`[relay] отвечает на поиск :${cfg.discoveryPort} (UDP)`));
+  }
+  const q = new URLSearchParams(cfg.open ? {} : { token: cfg.token });
+  console.log(`[relay] ссылка для клиентов: hearth-relay://${cfg.publicHost}:${cfg.controlPort}${q.toString() ? '?' + q : ''}`);
+  if (cfg.open) console.log('[relay] РЕЖИМ БЕЗ ТОКЕНА: подключиться может любой, кто достанет до этого порта. Используйте только в закрытой сети.');
   const httpSrv = net.createServer(handleHttpSocket);
   await listen(httpSrv, cfg.httpPort);
   console.log(`[relay] http :${cfg.httpPort}  домен *.${cfg.domain}`);

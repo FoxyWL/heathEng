@@ -1,5 +1,6 @@
 'use strict';
 // @imports:start
+import { token } from './lib.js';
 import { gameOf } from './state.js';
 // @imports:end
 // Значки игр: собственные пиктограммы (не логотипы игр) на цветной плитке в цвет игры.
@@ -71,7 +72,11 @@ function glyph(id, size = 18) {
 }
 
 /** Плитка с значком игры. size: 'sm' (панель), 'md' (шапка), 'lg' (карточки и каталог). */
-export function gameBadge(id, size = 'md') {
+const shown = new Set(); // адреса значков, которые уже загрузились (без мигания при перерисовке)
+const absent = new Set(); // у этих игр настоящего значка нет: не спрашиваем снова до перезагрузки страницы
+
+/** serverId и rev нужны серверам: у сервера может быть свой значок, rev меняется при замене. */
+export function gameBadge(id, size = 'md', serverId = '', rev = 0) {
   const g = gameOf(id) || {};
   const px = size === 'lg' ? 26 : size === 'sm' ? 15 : 20;
   const el = document.createElement('span');
@@ -79,5 +84,21 @@ export function gameBadge(id, size = 'md') {
   el.style.setProperty('--c', g.color || '#64748b');
   el.dataset.game = id;
   el.innerHTML = glyph(id, px);
+  const src = (serverId ? '/api/servers/' + serverId + '/icon?v=' + rev + '&' : '/api/games/' + id + '/icon?') + 'token=' + encodeURIComponent(token);
+  if (!absent.has(src)) {
+    const img = new Image();
+    img.alt = '';
+    img.className = 'gimg';
+    img.decoding = 'async';
+    const put = () => {
+      shown.add(src);
+      el.classList.add('has-img');
+      el.replaceChildren(img);
+    };
+    img.onload = put;
+    img.onerror = () => absent.add(src);
+    img.src = src;
+    if (shown.has(src) && img.complete && img.naturalWidth) put();
+  }
   return el;
 }

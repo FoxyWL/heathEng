@@ -82,6 +82,64 @@ export async function networkPage() {
     if (alive()) drawServers();
   };
 
+  const pin = async (ip) => {
+    await api('PUT', '/api/network/preferred', { ip });
+    net = await api('GET', '/api/network');
+    S.net = net;
+    toast(ip ? T('Адрес закреплён основным', 'Address pinned as main') : T('Адрес выбирается автоматически', 'Address is chosen automatically'));
+    draw();
+  };
+  let pubInfo = null;
+  const VERDICT = () => ({
+    upnp: [T('Роутер найден, порты открываются одной кнопкой.', 'A router was found, ports open with one button.'), 'ok'],
+    manual: [T('Внешний адрес есть, но роутер не поддерживает UPnP. Пробросьте порт на роутере вручную или возьмите туннель.', 'There is a public address, but the router has no UPnP. Forward the port on the router by hand or use the tunnel.'), 'warn'],
+    cgnat: [T('Провайдер выдаёт «серый» адрес (CGNAT): напрямую из интернета не достучаться. Используйте туннель.', 'Your provider gives a shared address (CGNAT): direct access from the internet is impossible. Use the tunnel.'), 'bad'],
+    unknown: [T('Нет связи с интернетом: внешний адрес определить не удалось.', 'No internet connection: the public address could not be determined.'), 'dim'],
+  });
+  const checkPublic = async () => {
+    pubInfo = { busy: true };
+    drawPublic();
+    pubInfo = await api('GET', '/api/public');
+    drawPublic();
+  };
+  const publicBox = h('div', { class: 'public-box', 'data-sect': 'public' });
+  function drawPublic() {
+    if (!pubInfo) {
+      return fill(publicBox, h('p', { class: 'muted' }, T('Чтобы друзья заходили из интернета, нужен внешний адрес. Hearth сам найдёт роутер и откроет порты сервера, если роутер это умеет.', 'For friends to join from the internet you need a public address. Hearth finds the router and opens the server ports if the router allows it.')),
+        h('button', { class: 'btn primary', 'data-act': 'public-check', on: { click: click(checkPublic) } }, icon('world', 16), T('Проверить доступ из интернета', 'Check internet access')));
+    }
+    if (pubInfo.busy) return fill(publicBox, h('p', { class: 'muted' }, h('span', { class: 'spinner' }), ' ', T('Ищу роутер и определяю внешний адрес…', 'Looking for the router and the public address…')));
+    const [msg, tone] = VERDICT()[pubInfo.verdict];
+    fill(publicBox,
+      h('div', { class: 'public-result', 'data-verdict': pubInfo.verdict },
+        h('div', {}, pubInfo.ip ? h('b', { class: 'mono' }, T('Внешний IP: ', 'Public IP: ') + pubInfo.ip) : null, pubInfo.gateway ? h('small', { class: 'muted' }, ' · ' + T('роутер: ', 'router: ') + pubInfo.gateway.name) : null),
+        h('p', { class: 'tone-' + tone }, msg),
+        h('div', { class: 'row-actions' },
+          h('button', { class: 'btn sm', 'data-act': 'public-check', on: { click: click(checkPublic) } }, icon('refresh', 14), T('Проверить снова', 'Check again')),
+          pubInfo.verdict === 'cgnat' || pubInfo.verdict === 'manual' ? h('button', { class: 'btn sm', on: { click: () => go('tunnels') } }, icon('tunnel', 14), T('Открыть «Туннели»', 'Open “Tunnels”')) : null)));
+  }
+  const togglePublic = async (s, enable) => {
+    try {
+      const r = await api('POST', `/api/servers/${s.id}/public`, { enabled: enable });
+      const i = S.servers.findIndex((x) => x.id === s.id);
+      if (i >= 0) S.servers[i] = { ...S.servers[i], ...r };
+      toast(enable ? T(`Порты открыты: ${r.publicIp.ext}`, `Ports opened: ${r.publicIp.ext}`) : T('Порты закрыты', 'Ports closed'));
+    } catch (e) {
+      toast(e.message, true);
+    }
+    if (alive()) drawServers();
+  };
+  // Порядок подключения друзей: сначала своя сеть, затем прямой адрес из интернета, затем туннель
+  const routes = (s) => {
+    const primary = net.addresses.find((a) => a.primary);
+    const port = ((s.ports || []).find((p) => !p.optional) || {}).port;
+    const tun = S.tun.tunnels.find((t) => t.serverId === s.id && t.id === 'srv-' + s.id);
+    const rows = [];
+    if (primary && port) rows.push([T('В одной сети с вами', 'On your network'), `${hostOf(s)}:${port}`, 'lan']);
+    if (s.publicIp && s.publicIp.enabled && port) rows.push([T('Из интернета напрямую', 'Direct from the internet'), `${s.publicIp.ext}:${port}`, 'direct']);
+    if (tun && tun.info) rows.push([T('Через туннель', 'Through the tunnel'), tun.info.url, 'tunnel']);
+    return rows;
+  };
   const addrCards = () => net.addresses.length
     ? net.addresses.map((a) => {
       const [kind, tone] = KIND()[a.kind];
@@ -89,7 +147,9 @@ export async function networkPage() {
         h('div', { class: 'ac-top' }, h('b', { class: 'mono' }, a.ip), a.primary ? h('span', { class: 'badge running' }, T('основной', 'main')) : null, a.virtual ? h('span', { class: 'badge' }, T('виртуальный', 'virtual')) : null),
         h('div', { class: 'ac-name' }, h('span', { class: 'mono' }, a.fqdn), copyBtn(a.fqdn)),
         a.primary ? hostsBadge(a.fqdn) : null,
-        h('small', { class: 'tone-' + tone }, `${kind} · ${a.iface}`));
+        h('small', { class: 'tone-' + tone }, `${kind} · ${a.iface}`),
+        a.pinned ? h('button', { class: 'btn sm ghost', 'data-act': 'unpin', title: T('Вернуть автоматический выбор', 'Back to automatic'), on: { click: click(() => pin('')) } }, icon('refresh', 14), T('Автовыбор', 'Automatic'))
+          : !a.primary ? h('button', { class: 'btn sm ghost', 'data-act': 'pin', title: T('Использовать этот адрес для имён и приглашений', 'Use this address for names and invites'), on: { click: click(() => pin(a.ip)) } }, T('Сделать основным', 'Make main')) : null);
     })
     : [h('p', { class: 'muted' }, T('Сетевых адресов не найдено: подключите ПК к сети.', 'No network addresses found: connect the PC to a network.'))];
 
@@ -135,13 +195,16 @@ export async function networkPage() {
       const rows = r && r.ports ? r.ports : null;
       const live = ['running', 'starting'].includes(s.state);
       return h('article', { class: 'net-srv', 'data-server': s.id },
-        h('div', { class: 'ns-head' }, gameBadge(s.game, 'sm'), h('b', {}, s.name), h('span', { class: 'badge ' + s.state }, STATE()[s.state] || s.state),
+        h('div', { class: 'ns-head' }, gameBadge(s.game, 'sm', s.id, s.iconRev), h('b', {}, s.name), h('span', { class: 'badge ' + s.state }, STATE()[s.state] || s.state),
           h('span', { class: 'ns-actions' },
             r && r.firewall && FW()[r.firewall] ? h('small', { class: 'tone-' + FW()[r.firewall][1], 'data-fw': r.firewall }, FW()[r.firewall][0]) : null,
+            h('button', { class: 'btn sm', 'data-act': s.publicIp && s.publicIp.enabled ? 'public-off' : 'public-on', title: T('Открыть порты сервера на роутере (UPnP)', 'Open the server ports on the router (UPnP)'), on: { click: click(() => togglePublic(s, !(s.publicIp && s.publicIp.enabled))) } }, icon('world', 14), s.publicIp && s.publicIp.enabled ? T('Закрыть интернет', 'Close internet') : T('Открыть для интернета', 'Open to the internet')),
             h('button', { class: 'btn sm', 'data-act': 'check', on: { click: click(() => check(s.id)) } }, icon('refresh', 14), T('Проверить', 'Check')),
             h('button', { class: 'btn sm', 'data-act': 'fw-open', title: T('Разрешить входящие подключения к портам сервера', 'Allow inbound connections to the server ports'), on: { click: runElevated(T('Открыть порты в брандмауэре?', 'Open the ports in the firewall?'), T('Windows покажет запрос прав администратора. Hearth добавит правила «Hearth: …» для портов этого сервера.', 'Windows will ask for administrator rights. Hearth adds “Hearth: …” rules for this server’s ports.'), `/api/servers/${s.id}/firewall`, { action: 'open' }, T('Порты открыты в брандмауэре', 'Ports opened in the firewall')) } }, icon('shield', 14), T('Открыть порты', 'Open ports')),
             h('button', { class: 'btn sm ghost', 'data-act': 'fw-close', on: { click: runElevated(T('Закрыть порты?', 'Close the ports?'), T('Правила «Hearth: …» этого сервера будут удалены.', 'This server’s “Hearth: …” rules will be removed.'), `/api/servers/${s.id}/firewall`, { action: 'close' }, T('Правила удалены', 'Rules removed')) } }, T('Закрыть порты', 'Close ports')))),
         nameEditor(s),
+        routes(s).length ? h('div', { class: 'routes', 'data-routes': s.id }, h('small', { class: 'muted' }, T('Как подключаться друзьям (по порядку):', 'How friends connect (in order):')), routes(s).map(([label, addr, kind], i) => h('div', { class: 'route', 'data-route': kind }, h('b', {}, i + 1 + '.'), h('span', {}, label), h('span', { class: 'mono' }, addr), copyBtn(addr)))) : null,
+        s.publicIp && s.publicIp.error ? h('small', { class: 'tone-bad' }, T('Прямой доступ: ', 'Direct access: ') + s.publicIp.error) : null,
         s.netName && primary ? h('div', { class: 'row-actions' },
           h('button', { class: 'btn sm', 'data-act': 'name-hosts', title: `${primary.ip} ${s.netName}`, on: { click: runElevated(T('Включить имя на этом ПК?', 'Enable the name on this PC?'), T(`В hosts будет добавлена строка «${primary.ip} ${s.netName}». Windows спросит права администратора.`, `The line “${primary.ip} ${s.netName}” is added to hosts. Windows asks for administrator rights.`), '/api/network/hosts', { ip: primary.ip, action: 'add', name: s.netName }, T('Имя добавлено в hosts', 'Name added to hosts')) } }, icon('link', 14), T('Включить имя на этом ПК', 'Enable the name on this PC')),
           h('button', { class: 'btn sm ghost', 'data-act': 'name-line', on: { click: (e) => copy(`${primary.ip} ${s.netName} # Hearth`, e.currentTarget) } }, icon('copy', 14), T('Строка для hosts друга', 'hosts line for a friend'))) : null,
@@ -173,6 +236,8 @@ export async function networkPage() {
       h('h2', {}, T('Имя → IP', 'Name → IP')),
       h('p', { class: 'muted' }, T('Друг прислал имя? Вставьте, и Hearth покажет адрес.', 'Did a friend send a name? Paste it and Hearth shows the address.')),
       h('div', { class: 'name-tool' }, h('div', { class: 'searchbar grow' }, icon('link', 16), nameIn), decoded),
+      h('h2', {}, T('Доступ из интернета', 'Internet access')),
+      publicBox,
       h('h2', {}, T('Доступ к серверам', 'Server access')),
       h('label', { class: 'beta-switch' }, h('input', { type: 'checkbox', 'data-role': 'beta-zone', checked: !!(net.beta && net.beta.anyZone), on: { change: async (e) => { net.beta = await api('PUT', '/api/beta', { anyZone: e.currentTarget.checked }); draw(); } } }), h('span', {}, T('Бета для администратора: разрешить свои зоны (soskacraft.mc). Обычным пользователям доступны только имена .', 'Admin beta: allow custom zones (soskacraft.mc). Regular users only get names ending in .') + net.suffix)),
       srvHost,
@@ -181,6 +246,7 @@ export async function networkPage() {
         h('p', { class: 'muted' }, T('Адрес в домашней сети (192.168.…) работает только внутри этой сети. Если у провайдера CGNAT или нет белого IP, используйте туннель.', 'An address on the home network (192.168.…) works inside that network only. With carrier-grade NAT or no public IP, use the tunnel.')),
         h('div', { class: 'row-actions' }, h('button', { class: 'btn', on: { click: () => go('tunnels') } }, icon('tunnel', 16), T('Открыть «Туннели»', 'Open “Tunnels”')))));
     drawServers();
+    drawPublic();
   }
 
   fill(page, h('p', { class: 'muted' }, h('span', { class: 'spinner' }), ' ', T('Загрузка…', 'Loading…')));

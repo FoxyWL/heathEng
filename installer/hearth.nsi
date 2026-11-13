@@ -1,11 +1,11 @@
-; Установщик Hearth (NSIS 3, Unicode). Сборка: makensis -DVER=1.3.1 -DSRC=<папка с hearth.exe> installer/hearth.nsi
+; Установщик Hearth (NSIS 3, Unicode). Сборка: makensis -DVER=1.4.0 -DSRC=<dist/win-unpacked> installer/hearth.nsi
 Unicode true
 !include "MUI2.nsh"
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
 
 !ifndef VER
-  !define VER "1.3.1"
+  !define VER "1.4.0"
 !endif
 !ifndef SRC
   !define SRC "..\dist"
@@ -36,11 +36,12 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "MIT License"
 !define MUI_ICON "..\build\hearth.ico"
 !define MUI_UNICON "..\build\hearth.ico"
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\hearth.exe"
+!define MUI_FINISHPAGE_RUN "$INSTDIR\Hearth.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "$(T_RUN)"
 
 !insertmacro MUI_PAGE_WELCOME
 !insertmacro MUI_PAGE_COMPONENTS
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirLeave
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -61,12 +62,20 @@ LangString T_BUSY ${LANG_ENGLISH} "Hearth is running. Close it (the 'Quit Hearth
 LangString T_PURGE ${LANG_RUSSIAN} "Удалить также данные Hearth (серверы, бэкапы, настройки) из $APPDATA\Hearth?$\r$\n$\r$\nВыберите «Нет», если планируете установить Hearth снова."
 LangString T_PURGE ${LANG_ENGLISH} "Also delete Hearth data (servers, backups, settings) from $APPDATA\Hearth?$\r$\n$\r$\nChoose No if you plan to reinstall Hearth."
 
+Function DirLeave
+  ; Если выбрана чужая папка (например, Документы), ставим в её подпапку Hearth: деинсталлятор удаляет папку целиком
+  ${GetFileName} "$INSTDIR" $0
+  ${If} $0 != "Hearth"
+    StrCpy $INSTDIR "$INSTDIR\Hearth"
+  ${EndIf}
+FunctionEnd
+
 Function WaitForExeFree
   ; exe, пока Hearth работает, занят системой: пытаемся удалить его и просим закрыть программу
   retry:
-  IfFileExists "$INSTDIR\hearth.exe" 0 done
+  IfFileExists "$INSTDIR\Hearth.exe" 0 done
   ClearErrors
-  Delete "$INSTDIR\hearth.exe"
+  Delete "$INSTDIR\Hearth.exe"
   IfErrors 0 done
   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(T_BUSY)" /SD IDCANCEL IDRETRY retry
   Abort
@@ -77,9 +86,9 @@ Section "$(T_CORE)" SecCore
   SectionIn RO
   SetOutPath "$INSTDIR"
   Call WaitForExeFree
-  File "${SRC}\hearth.exe"
+  ; вся папка приложения: Hearth.exe, Chromium, код и ядро; чужие файлы в папке установки не трогаем (см. DirLeave)
+  File /r "${SRC}\*.*"
   File "..\build\hearth.ico"
-  File /oname=README.txt "..\README.md"
   ; Файл-признак: установленная версия хранит данные в %APPDATA%\Hearth
   FileOpen $0 "$INSTDIR\installed.flag" w
   FileWrite $0 "installed by Hearth Setup ${VER}$\r$\n"
@@ -88,7 +97,7 @@ Section "$(T_CORE)" SecCore
   WriteUninstaller "$INSTDIR\Uninstall.exe"
 
   CreateDirectory "$SMPROGRAMS\Hearth"
-  CreateShortcut "$SMPROGRAMS\Hearth\Hearth.lnk" "$INSTDIR\hearth.exe" "" "$INSTDIR\hearth.ico" 0
+  CreateShortcut "$SMPROGRAMS\Hearth\Hearth.lnk" "$INSTDIR\Hearth.exe" "" "$INSTDIR\hearth.ico" 0
   CreateShortcut "$SMPROGRAMS\Hearth\Uninstall Hearth.lnk" "$INSTDIR\Uninstall.exe"
 
   WriteRegStr HKCU "Software\Hearth" "InstallDir" "$INSTDIR"
@@ -107,17 +116,26 @@ Section "$(T_CORE)" SecCore
 SectionEnd
 
 Section "$(T_DESK)" SecDesktop
-  CreateShortcut "$DESKTOP\Hearth.lnk" "$INSTDIR\hearth.exe" "" "$INSTDIR\hearth.ico" 0
+  CreateShortcut "$DESKTOP\Hearth.lnk" "$INSTDIR\Hearth.exe" "" "$INSTDIR\hearth.ico" 0
 SectionEnd
 
 Section "Uninstall"
   Call un.WaitForExeFree
-  Delete "$INSTDIR\hearth.exe"
-  Delete "$INSTDIR\hearth.ico"
-  Delete "$INSTDIR\README.txt"
-  Delete "$INSTDIR\installed.flag"
-  Delete "$INSTDIR\Uninstall.exe"
-  RMDir "$INSTDIR"
+  ; папка установки называется Hearth (DirLeave): удаляем её целиком.
+  ; Папку от старых версий с другим именем не сносим: только свои файлы.
+  ${GetFileName} "$INSTDIR" $0
+  ${If} $0 == "Hearth"
+    RMDir /r "$INSTDIR"
+  ${Else}
+    Delete "$INSTDIR\Hearth.exe"
+    Delete "$INSTDIR\hearth.ico"
+    Delete "$INSTDIR\README.txt"
+    Delete "$INSTDIR\installed.flag"
+    Delete "$INSTDIR\Uninstall.exe"
+    RMDir /r "$INSTDIR\resources"
+    RMDir /r "$INSTDIR\locales"
+    RMDir "$INSTDIR"
+  ${EndIf}
   Delete "$SMPROGRAMS\Hearth\Hearth.lnk"
   Delete "$SMPROGRAMS\Hearth\Uninstall Hearth.lnk"
   RMDir "$SMPROGRAMS\Hearth"
@@ -133,9 +151,9 @@ SectionEnd
 
 Function un.WaitForExeFree
   retry:
-  IfFileExists "$INSTDIR\hearth.exe" 0 done
+  IfFileExists "$INSTDIR\Hearth.exe" 0 done
   ClearErrors
-  Delete "$INSTDIR\hearth.exe"
+  Delete "$INSTDIR\Hearth.exe"
   IfErrors 0 done
   MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$(T_BUSY)" /SD IDCANCEL IDRETRY retry
   Abort

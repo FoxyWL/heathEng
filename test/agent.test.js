@@ -151,6 +151,33 @@ async function main() {
   const del = await api('DELETE', `/api/servers/${id}?files=1`);
   ok('delete server', del.status === 200 && fs.existsSync(path.join(data, 'servers', id)) === false);
 
+  // ---- полное удаление: работающий сервер, папка, бэкапы, туннели
+  {
+    const sv = await api('POST', '/api/servers', { game: 'custom', name: 'ToDelete', command: 'node -e "setInterval(()=>{},1000)"', settings: { port: 15888 } });
+    const rid = sv.j.id;
+    const dir = path.join(data, 'servers', rid);
+    fs.writeFileSync(path.join(dir, 'world.dat'), Buffer.alloc(2 * 1048576));
+    fs.mkdirSync(path.join(data, 'backups', rid), { recursive: true });
+    fs.writeFileSync(path.join(data, 'backups', rid, 'old.tar.gz'), Buffer.alloc(1048576));
+    await api('POST', `/api/servers/${rid}/start`);
+    await until(async () => (await api('GET', `/api/servers/${rid}`)).j.state === 'running');
+    await api('POST', '/api/tunnels', { serverId: rid, name: 'extra', protocol: 'tcp', localPort: 15889 });
+    const keep = await api('DELETE', `/api/servers/${rid}`);
+    ok('delete without files keeps the folder and backups', keep.status === 200 && fs.existsSync(dir) && fs.existsSync(path.join(data, 'backups', rid)) && keep.j.kept.includes(dir));
+    const sv2 = await api('POST', '/api/servers', { game: 'custom', name: 'ToDelete2', command: 'node -e "setInterval(()=>{},1000)"', settings: { port: 15890 } });
+    const rid2 = sv2.j.id;
+    const dir2 = path.join(data, 'servers', rid2);
+    fs.writeFileSync(path.join(dir2, 'world.dat'), Buffer.alloc(3 * 1048576));
+    fs.mkdirSync(path.join(data, 'backups', rid2), { recursive: true });
+    fs.writeFileSync(path.join(data, 'backups', rid2, 'b.tar.gz'), Buffer.alloc(1048576));
+    await api('POST', `/api/servers/${rid2}/start`);
+    await until(async () => (await api('GET', `/api/servers/${rid2}`)).j.state === 'running');
+    const full = await api('DELETE', `/api/servers/${rid2}?files=1`);
+    ok('delete with files of a RUNNING server removes folder, backups and reports the freed space', full.status === 200 && !fs.existsSync(dir2) && !fs.existsSync(path.join(data, 'backups', rid2)) && full.j.freedMb >= 4 && full.j.leftover.length === 0, JSON.stringify(full.j).slice(0, 160));
+    const left = (await api('GET', '/api/servers')).j.filter((x) => x.id === rid2 || x.id === rid);
+    ok('removed servers disappear from the list', left.length === 0);
+  }
+
   agent.kill('SIGINT');
   relay.kill();
   await wait(500);

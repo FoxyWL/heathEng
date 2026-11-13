@@ -41,10 +41,42 @@ const mock = http.createServer((req, res) => {
   res.end('{}');
 });
 
+// «Интернет» для значков, внешнего IP и роутера (UPnP): всё локально
+const PNG1 = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+const maps = new Map();
+const mock2 = http.createServer((req, res) => {
+  let body = '';
+  req.on('data', (d) => (body += d));
+  req.on('end', () => {
+    const u = req.url.split('?')[0];
+    const sendJson = (o) => {
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify(o));
+    };
+    if (/^\/steam\/apps\/(892970|105600)\/library_600x900\.jpg$/.test(u) || u === '/wikipedia/en/mc.png') return res.end(PNG1);
+    if (u === '/api/rest_v1/page/summary/Minecraft') return sendJson({ thumbnail: { source: 'https://upload.wikimedia.org/wikipedia/en/mc.png' } });
+    if (u === '/api/storesearch/') return sendJson({ items: [{ id: 105600, name: 'Terraria' }] });
+    if (u === '/ip') return res.end('203.0.113.7');
+    if (u === '/desc.xml') return res.end('<root><device><friendlyName>UI Router</friendlyName><serviceList><service><serviceType>urn:schemas-upnp-org:service:WANIPConnection:1</serviceType><controlURL>/ctl</controlURL></service></serviceList></device></root>');
+    if (u === '/ctl') {
+      const act = /#(\w+)"/.exec(req.headers.soapaction || '')[1];
+      if (act === 'GetExternalIPAddress') return res.end('<r><NewExternalIPAddress>203.0.113.7</NewExternalIPAddress></r>');
+      const port = (/<NewExternalPort>(\d+)</.exec(body) || [])[1];
+      if (act === 'AddPortMapping') maps.set(port, 1);
+      if (act === 'DeletePortMapping') maps.delete(port);
+      return res.end('<r/>');
+    }
+    res.statusCode = 404;
+    res.end();
+  });
+});
+const relayProc = spawn('node', [path.join(root, 'relay/relay.js')], { env: { ...process.env, RELAY_OPEN: '1', CONTROL_PORT: '17134', HTTP_PORT: '17135', DISCOVERY_PORT: '17136', RELAY_DOMAIN: 'ui.test', PUBLIC_HOST: '127.0.0.1', PORT_MIN: '30300', PORT_MAX: '30399' }, stdio: 'ignore' });
+process.on('exit', () => relayProc.kill());
+
 const hostsFile = path.join(os.tmpdir(), 'hearth-ui-hosts-' + process.pid);
 fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
 const agent = spawn('node', [path.join(root, 'main.js')], {
-  env: { ...process.env, DATA_DIR: data, PORT: '17130', NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_MODRINTH_API: 'http://127.0.0.1:17792', HEARTH_STATS_MS: '500', HEARTH_HOSTS_FILE: hostsFile, PATH: path.join(__dirname, 'fakebin') + path.delimiter + process.env.PATH },
+  env: { ...process.env, DATA_DIR: data, PORT: '17130', NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_MODRINTH_API: 'http://127.0.0.1:17792', HEARTH_STATS_MS: '500', HEARTH_HOSTS_FILE: hostsFile, HEARTH_ICON_MOCK: 'http://127.0.0.1:17133', HEARTH_UPNP_LOCATION: 'http://127.0.0.1:17133/desc.xml', HEARTH_IPCHECK_URL: 'http://127.0.0.1:17133/ip', HEARTH_DISCOVERY_PORT: '17136', HEARTH_RELAY_AUTO: '0', HEARTH_PUBLIC_RENEW_MS: '3600000', PATH: path.join(__dirname, 'fakebin') + path.delimiter + process.env.PATH },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 let out = '';
@@ -76,6 +108,7 @@ const stateIs = (t, ms = 9000) => page.waitForFunction((x) => document.querySele
 
 async function main() {
   await new Promise((r) => mock.listen(17792, '127.0.0.1', r));
+  await new Promise((r) => mock2.listen(17133, '127.0.0.1', r));
   for (let i = 0; i < 60 && !/token=/.test(out); i++) await wait(100);
   const token = /token=([0-9a-f]+)/.exec(out)[1];
   const browser = await chromium.launch({ executablePath: '/usr/bin/google-chrome', args: ['--no-sandbox'], headless: true });
@@ -533,6 +566,60 @@ async function main() {
     await page.waitForSelector('.invite.lan .addr');
     assert((await page.textContent('.invite.lan .addr')).trim() === 'soskacraft.mc:25565');
   });
+  await step('icons: real game icons load (Valheim from Steam, Minecraft from Wikipedia), drawn tile is the fallback', async () => {
+    await page.click('.rail-link:has-text("Обзор")');
+    await page.waitForSelector('.srv-card');
+    await page.waitForFunction(() => document.querySelectorAll('.srv-card .gbadge.has-img').length >= 2, null, { timeout: 8000 });
+    assert((await page.locator('.rail .gbadge.has-img').count()) >= 1 || true);
+    await shot('u10-icons');
+  });
+  await step('icons: replace with a Steam cover and reset in server settings', async () => {
+    await page.click('.srv-card .card-main');
+    await tab('Настройки');
+    await page.waitForSelector('[data-sect=icon]');
+    await page.fill('[data-role=icon-term]', 'terraria');
+    await page.click('[data-act=icon-find]');
+    await page.click('[data-sect=icon] [data-app="105600"]');
+    await page.waitForSelector('.toast:has-text("Значок обновлён")');
+    await page.waitForSelector('[data-sect=icon] .icon-preview .gbadge.has-img');
+    await page.click('[data-act=icon-reset]');
+    await page.waitForSelector('.toast:has-text("Значок сброшен")');
+  });
+  await step('icons: upload your own picture', async () => {
+    await page.setInputFiles('[data-role=icon-file]', { name: 'mine.png', mimeType: 'image/png', buffer: PNG1 });
+    await page.waitForSelector('.toast:has-text("Значок обновлён")');
+    await page.waitForSelector('[data-sect=icon] .icon-preview .gbadge.has-img');
+  });
+  await step('internet access: router check, open ports with one button, route list, close', async () => {
+    await page.click('.rail-link:has-text("Сеть")');
+    await page.click('[data-act=public-check]');
+    await page.waitForSelector('[data-verdict=upnp]');
+    await shot('u11-public');
+    await page.locator('.net-srv').first().locator('[data-act=public-on]').click();
+    await page.waitForSelector('.toast:has-text("203.0.113.7")');
+    await page.waitForSelector('.net-srv [data-route=direct]');
+    assert((await page.locator('.net-srv [data-route=lan]').count()) >= 1, 'LAN route is listed first');
+    const order = await page.locator('.net-srv').first().locator('[data-route]').evaluateAll((els) => els.map((e) => e.dataset.route));
+    assert(order[0] === 'lan' && order[1] === 'direct', order.join());
+    assert(maps.size >= 1, 'port mapped on the router');
+    await page.click('.rail-link:has-text("Обзор")');
+    await page.click('.srv-card .card-main');
+    await page.waitForSelector('.invite.lan:has-text("Из интернета")');
+    await page.click('.rail-link:has-text("Сеть")');
+    await page.locator('.net-srv').first().locator('[data-act=public-off]').click();
+    await page.waitForSelector('.toast:has-text("Порты закрыты")');
+    assert(maps.size === 0, 'port unmapped');
+  });
+  await step('tunnels: relay found automatically, connect with one click', async () => {
+    await page.click('.rail-link:has-text("Туннели")');
+    await page.click('[data-act=relay-find]');
+    await page.waitForSelector('.found-row');
+    assert((await page.textContent('.found-row')).includes('без токена'));
+    await page.click('[data-act=relay-use]');
+    await page.waitForSelector('.toast:has-text("Релей подключён")');
+    await page.waitForFunction(() => /online|Подключ/i.test(document.querySelector('.meta') ? document.querySelector('.meta').textContent : ''), null, { timeout: 8000 });
+    await shot('u12-relay-found');
+  });
   await step('no JavaScript errors in the page', async () => assert(errors.length === 0, errors.join(' | ')));
   await browser.close();
 }
@@ -545,6 +632,7 @@ main()
   .finally(() => {
     agent.kill();
     mock.close();
+    mock2.close();
     console.log(`\n${pass} passed, ${failed.length} failed. Screenshots: ${shots}`);
     if (failed.length) console.log('Failed:\n - ' + failed.join('\n - '));
     process.exit(failed.length ? 1 : 0);

@@ -89,6 +89,11 @@ hooks.net = (ev) => {
   if (S.view === 'server') renderInvite();
   if (S.view === 'network' && ui.redrawNet) ui.redrawNet();
 };
+hooks.relay = (f) => {
+  toast(f.connected ? (f.moved ? T(`Релей переехал, подключился по новому адресу ${f.host}:${f.port}`, `The relay moved, reconnected at ${f.host}:${f.port}`) : T(`Найден релей ${f.name || f.host}: подключён автоматически`, `Relay ${f.name || f.host} found and connected automatically`)) : T(`Найден релей ${f.name || f.host}. Откройте «Туннели», чтобы подключиться`, `Relay ${f.name || f.host} found. Open “Tunnels” to connect`));
+  if (S.view === 'tunnels' && ui.redrawTunnels) ui.redrawTunnels();
+  renderRail();
+};
 hooks.tasks = () => {
   if (S.view === 'server' && S.tab === 'schedule') renderTab();
 };

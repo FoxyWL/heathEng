@@ -64,7 +64,7 @@ let guiCache = null;
 function isGuiExe() {
   if (guiCache !== null) return guiCache;
   guiCache = false;
-  if (!isWin || !process.pkg) return false;
+  if (!isWin || !require('./runtime').electron) return false;
   try {
     const fd = fs.openSync(process.execPath, 'r');
     const buf = Buffer.alloc(4096);
