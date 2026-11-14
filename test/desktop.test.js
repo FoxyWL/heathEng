@@ -96,7 +96,7 @@ async function inMain(expr) {
   });
   await step('window is sandboxed: no Node in the page, outside links are not opened inside', async () => {
     assert(await page.evaluate(() => typeof require === 'undefined' && typeof process === 'undefined'), 'Node is exposed to the page');
-    const r = await inMain("const w=e.BrowserWindow.getAllWindows()[0];w.webContents.executeJavaScript(\"window.open('https://example.com/')\");return 1");
+    await inMain("const w=e.BrowserWindow.getAllWindows()[0];w.webContents.executeJavaScript(\"window.open('https://example.com/')\");return 1");
     await wait(600);
     const pages = browser.contexts().flatMap((c) => c.pages());
     assert(pages.length === 1 && pages[0].url().startsWith('http://127.0.0.1'), 'extra window opened: ' + pages.map((p) => p.url()).join());

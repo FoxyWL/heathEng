@@ -373,3 +373,15 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .routes { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
 .route { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 0; border-top: 1px solid var(--line); }
 .route .btn { margin-left: auto; }
+
+/* Имя вместо IP и «Стать релеем» */
+.name-opt { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; cursor: pointer; background: var(--paper); }
+.name-opt.on { border-color: var(--teal); box-shadow: 0 0 0 1px var(--teal) inset; }
+.name-opt input { margin-top: 4px; accent-color: var(--teal); }
+.name-opt span { display: flex; flex-direction: column; gap: 2px; }
+.name-opt small { color: var(--muted); font-size: 13px; }
+.duck-form { display: flex; flex-direction: column; gap: 8px; padding-top: 4px; }
+.tag.ok { background: rgba(46, 158, 98, .18); color: var(--ok); margin-left: 8px; }
+.relayhost .rh-status { display: flex; align-items: center; gap: 8px; }
+.relayhost .addr-row { margin: 8px 0; }
+.relayhost .addr { word-break: break-all; }

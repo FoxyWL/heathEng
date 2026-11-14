@@ -6,7 +6,7 @@ export let lang = localStorage.getItem('hearth.lang') || 'ru';
 export const setLang = (v) => { lang = v; };
 // Точки связи между модулями: нижние слои вызывают верхние через hooks, а не импортом (нет циклов при старте)
 const noop = () => {};
-export const hooks = { gate: noop, render: noop, state: noop, log: noop, cleared: noop, install: noop, tunnels: noop, traffic: noop, tasks: noop, net: noop, relay: noop };
+export const hooks = { gate: noop, render: noop, state: noop, log: noop, cleared: noop, install: noop, tunnels: noop, traffic: noop, tasks: noop, net: noop, relay: noop, relayhost: noop, publicname: noop };
 export const T = (ru, en) => (lang === 'ru' ? ru : en);
 export const lab = (o) => (o && typeof o === 'object' ? o[lang] || o.en : o);
 

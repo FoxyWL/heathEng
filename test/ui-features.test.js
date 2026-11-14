@@ -76,7 +76,7 @@ process.on('exit', () => relayProc.kill());
 const hostsFile = path.join(os.tmpdir(), 'hearth-ui-hosts-' + process.pid);
 fs.writeFileSync(hostsFile, '127.0.0.1 localhost\n');
 const agent = spawn('node', [path.join(root, 'main.js')], {
-  env: { ...process.env, DATA_DIR: data, PORT: '17130', NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_MODRINTH_API: 'http://127.0.0.1:17792', HEARTH_STATS_MS: '500', HEARTH_HOSTS_FILE: hostsFile, HEARTH_ICON_MOCK: 'http://127.0.0.1:17133', HEARTH_UPNP_LOCATION: 'http://127.0.0.1:17133/desc.xml', HEARTH_IPCHECK_URL: 'http://127.0.0.1:17133/ip', HEARTH_DISCOVERY_PORT: '17136', HEARTH_RELAY_AUTO: '0', HEARTH_PUBLIC_RENEW_MS: '3600000', PATH: path.join(__dirname, 'fakebin') + path.delimiter + process.env.PATH },
+  env: { ...process.env, DATA_DIR: data, PORT: '17130', NO_BROWSER: '1', HEARTH_NO_OPEN: '1', HEARTH_MODRINTH_API: 'http://127.0.0.1:17792', HEARTH_STATS_MS: '500', HEARTH_HOSTS_FILE: hostsFile, HEARTH_ICON_MOCK: 'http://127.0.0.1:17133', HEARTH_UPNP_LOCATION: 'http://127.0.0.1:17133/desc.xml', HEARTH_IPCHECK_URL: 'http://127.0.0.1:17133/ip', HEARTH_DISCOVERY_PORT: '17136', HEARTH_RELAY_AUTO: '0', HEARTH_RELAY_DISCOVERY: '0', HEARTH_PUBLIC_RENEW_MS: '3600000', PATH: path.join(__dirname, 'fakebin') + path.delimiter + process.env.PATH },
   stdio: ['ignore', 'pipe', 'inherit'],
 });
 let out = '';
@@ -609,6 +609,39 @@ async function main() {
     await page.locator('.net-srv').first().locator('[data-act=public-off]').click();
     await page.waitForSelector('.toast:has-text("Порты закрыты")');
     assert(maps.size === 0, 'port unmapped');
+  });
+  await step('relay on this PC: one button starts it, link appears, router ports open, stop closes them', async () => {
+    await page.evaluate(async () => {
+      await fetch('/api/relayhost', { method: 'PUT', headers: { authorization: 'Bearer ' + localStorage.getItem('hearth.token'), 'content-type': 'application/json' }, body: JSON.stringify({ controlPort: 17137, portMin: 17138, portMax: 17139 }) });
+    });
+    await page.click('.rail-link:has-text("Туннели")');
+    await page.click('[data-sect=relayhost] summary');
+    await page.click('[data-act=relayhost-start]');
+    await page.waitForSelector('[data-role=relayhost-link]', { timeout: 15000 });
+    const link = await page.textContent('[data-role=relayhost-link]');
+    assert(/^hearth-relay:\/\/203\.0\.113\.7:17137\?token=[0-9a-f]+$/.test(link), link);
+    assert(maps.has('17137') && maps.has('17138') && maps.has('17139'), 'ports open on the router: ' + [...maps.keys()].join());
+    await shot('u13-relayhost');
+    await page.click('[data-act=relayhost-stop]');
+    await page.waitForSelector('[data-act=relayhost-start]');
+    await page.waitForFunction(() => true);
+    for (let i = 0; i < 30 && maps.has('17137'); i++) await new Promise((r) => setTimeout(r, 200));
+    assert(!maps.has('17137') && !maps.has('17138'), 'router ports closed');
+  });
+  await step('public name: sslip.io name instead of IP, then back to plain IP', async () => {
+    await page.click('.rail-link:has-text("Сеть")');
+    await page.waitForSelector('[data-sect=publicname]');
+    await page.locator('.net-srv').first().locator('[data-act=public-on]').click();
+    await page.waitForSelector('.net-srv [data-route=direct]');
+    await page.click('[data-sect=publicname] [data-mode=sslip]');
+    await page.waitForFunction(() => /\.203-0-113-7\.sslip\.io:\d+/.test((document.querySelector('.net-srv [data-route=direct] .mono') || {}).textContent || ''), null, { timeout: 8000 });
+    await shot('u14-publicname');
+    await page.click('[data-sect=publicname] [data-mode=duckdns]');
+    await page.waitForSelector('[data-role=duck-sub]');
+    await page.click('[data-sect=publicname] [data-mode=off]');
+    await page.waitForFunction(() => /^203\.0\.113\.7:\d+$/.test((document.querySelector('.net-srv [data-route=direct] .mono') || {}).textContent || ''), null, { timeout: 8000 });
+    await page.locator('.net-srv').first().locator('[data-act=public-off]').click();
+    await page.waitForSelector('.toast:has-text("Порты закрыты")');
   });
   await step('tunnels: relay found automatically, connect with one click', async () => {
     await page.click('.rail-link:has-text("Туннели")');

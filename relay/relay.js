@@ -328,6 +328,9 @@ async function main() {
   }
 }
 
+// Запущен из Hearth («Стать релеем»): если Hearth закрыт или упал, релей уходит вместе с ним и не занимает порты
+if (process.send) process.on('disconnect', () => process.exit(0));
+
 main().catch((e) => {
   console.error('[relay] ошибка запуска:', e.message);
   process.exit(1);

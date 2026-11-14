@@ -125,7 +125,7 @@ export function renderInvite() {
   const extra = mine.filter((x) => x !== t);
   const lan = S.net && S.net.addresses.find((x) => x.primary);
   const lanPort = lan && portOf(s);
-  const sig = JSON.stringify([s.id, s.game, s.tunnel.enabled, r.enabled, r.host, r.status, r.error, lan && lan.ip, lanPort, s.netName, s.publicIp && s.publicIp.ext, s.publicIp && s.publicIp.error, mine.map((x) => [x.id, x.info && x.info.url, x.error, x.name])]);
+  const sig = JSON.stringify([s.id, s.game, s.tunnel.enabled, r.enabled, r.host, r.status, r.error, lan && lan.ip, lanPort, s.netName, s.publicIp && s.publicIp.ext, s.publicIp && s.publicIp.host, s.publicIp && s.publicIp.error, mine.map((x) => [x.id, x.info && x.info.url, x.error, x.name])]);
   if (ui.inviteSig === sig && ui.invite.firstChild) return;
   ui.inviteSig = sig;
   const row = [h('div', { class: 'lbl' }, T('Адрес для друзей', 'Address for friends'))];
@@ -154,8 +154,8 @@ export function renderInvite() {
   }
   const pubRow = s.publicIp && s.publicIp.enabled && lanPort ? h('div', { class: 'invite lan' },
     h('div', { class: 'lbl' }, T('Из интернета', 'From the internet')),
-    h('div', { class: 'addr' }, `${s.publicIp.ext}:${lanPort}`),
-    h('button', { class: 'btn', on: { click: (e) => copy(`${s.publicIp.ext}:${lanPort}`, e.currentTarget) } }, T('Скопировать', 'Copy')),
+    h('div', { class: 'addr' }, `${s.publicIp.host || s.publicIp.ext}:${lanPort}`),
+    h('button', { class: 'btn', on: { click: (e) => copy(`${s.publicIp.host || s.publicIp.ext}:${lanPort}`, e.currentTarget) } }, T('Скопировать', 'Copy')),
     s.publicIp.error ? h('div', { class: 'err' }, s.publicIp.error) : null) : null;
   const lanRow = lan && lanPort ? h('div', { class: 'invite lan' },
     h('div', { class: 'lbl' }, T('В вашей сети', 'On your network')),

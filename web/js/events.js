@@ -109,6 +109,14 @@ export function connectEvents() {
     S.relayFound = f;
     hooks.relay(f);
   });
+  on('relayhost', (v) => {
+    S.relayHost = v;
+    hooks.relayhost();
+  });
+  on('publicname', (v) => {
+    S.publicName = v;
+    hooks.publicname();
+  });
   on('traffic', onTraffic);
   on('tasks', (v) => {
     S.tasks = v;

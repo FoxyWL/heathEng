@@ -94,6 +94,12 @@ hooks.relay = (f) => {
   if (S.view === 'tunnels' && ui.redrawTunnels) ui.redrawTunnels();
   renderRail();
 };
+hooks.relayhost = () => {
+  if (S.view === 'tunnels' && ui.redrawRelayHost) ui.redrawRelayHost();
+};
+hooks.publicname = () => {
+  if (S.view === 'network' && ui.redrawPublicName) ui.redrawPublicName();
+};
 hooks.tasks = () => {
   if (S.view === 'server' && S.tab === 'schedule') renderTab();
 };

@@ -4,6 +4,7 @@ import { dual, fmtRate, spark } from './charts.js';
 import { icon } from './icons.js';
 import { T, api, click, clock, copy, fmtSize, guard, h, toast, uptime } from './lib.js';
 import { relayFinder } from './relayfind.js';
+import { relayHostBox } from './relayhost.js';
 import { go, renderMain, renderRail } from './shell.js';
 import { S, fill, setTun, ui } from './state.js';
 // @imports:end
@@ -104,16 +105,17 @@ export function tunnelsPage() {
     fill(metaEl, h('span', { class: 'lamp ' + (rr.enabled ? rr.status : '') }), h('b', {}, T('Релей: ', 'Relay: ') + (rr.enabled ? stText()[rr.status] || rr.status : stText().idle) + lat), rr.error ? h('span', { style: 'color:var(--bad)' }, rr.error) : null);
   };
   drawMeta();
-  const relayCmd = 'RELAY_TOKEN=секрет RELAY_DOMAIN=tun.example.com PUBLIC_HOST=tun.example.com hearth relay';
+  const relayCmd = 'curl -fsSL https://raw.githubusercontent.com/FoxyWL/heathEng/main/relay/install.sh | sudo bash';
   ui.main.replaceChildren(
     h('div', { class: 'page wide' },
       h('h1', {}, T('Туннели', 'Tunnels')),
-      h('p', { class: 'lead' }, T('Туннель даёт публичный адрес без белого IP и проброса портов. Он работает через релей — небольшой сервер, который вы разворачиваете на любом VPS.', 'A tunnel gives you a public address with no public IP and no port forwarding. It goes through a relay — a small server you deploy on any VPS.')),
+      h('p', { class: 'lead' }, T('Туннель даёт публичный адрес без белого IP и проброса портов. Он работает через релей — небольшой сервер, который вы разворачиваете на любом VPS. Друзьям ничего скачивать не нужно: они вводят этот адрес в игре.', 'A tunnel gives you a public address with no public IP and no port forwarding. It goes through a relay — a small server you deploy on any VPS. Friends do not need to download anything: they type the address into the game.')),
       metaEl,
       h('div', { class: 'cols' },
         h('div', {}, h('h2', {}, T('Активные туннели', 'Active tunnels')), list),
         detailHost),
       h('div', { class: 'sect' }, h('h3', {}, T('Подключение к релею', 'Connect to a relay')), relayFinder(() => { renderRail(); renderMain(); })),
+      relayHostBox(),
       h('details', { class: 'help' }, h('summary', {}, T('Ввести адрес вручную', 'Enter the address manually')),
         h('div', { class: 'form' },
           h('div', { class: 'field' }, h('label', {}, T('Адрес релея', 'Relay host'), host), h('small', {}, T('Домен или IP вашего VPS', 'Domain or IP of your VPS'))),
@@ -132,9 +134,9 @@ export function tunnelsPage() {
         h('div', { class: 'savebar' }, addT)),
       h('details', { class: 'help' },
         h('summary', {}, T('У меня нет релея. Как его запустить?', 'I have no relay. How do I run one?')),
-        h('p', { class: 'muted' }, T('На VPS с белым IP запустите тот же файл в режиме релея, откройте порты 7000, 8080 и диапазон 20000–29999 (TCP и UDP). Для HTTP-адресов добавьте DNS-запись *.ваш-домен на IP сервера.', 'On a VPS with a public IP run the same file in relay mode, open ports 7000, 8080 and the range 20000–29999 (TCP and UDP). For HTTP addresses add a *.your-domain DNS record pointing at the server.')),
+        h('p', { class: 'muted' }, T('Арендуйте любой VPS с Ubuntu или Debian, подключитесь по SSH и выполните одну команду: она поставит релей, откроет порты и напечатает ссылку-приглашение. Либо, если у вашего ПК белый IP, запустите релей на нём (блок «Стать релеем» выше).', 'Rent any VPS with Ubuntu or Debian, connect over SSH and run one command: it installs the relay, opens the ports and prints an invite link. Or, if your PC has a public IP, run the relay on it (the “Become a relay” block above).')),
         h('div', { class: 'codeblock' }, h('pre', {}, relayCmd), h('button', { class: 'btn sm', on: { click: (e) => copy(relayCmd, e.currentTarget) } }, T('Копировать', 'Copy'))),
-        h('p', { class: 'muted' }, T('Токен, который вы придумали, введите выше в поле «Токен».', 'Enter the token you made up in the “Token” field above.')))),
+        h('p', { class: 'muted' }, T('Скопируйте напечатанную ссылку hearth-relay://… и вставьте её выше в «Подключить по ссылке»: адрес и токен вводить не нужно.', 'Copy the printed hearth-relay://… link and paste it above into “Connect by link”: no need to type the address or token.')))),
   );
   ui.redrawList = drawList;
   ui.redrawTunnels = () => {
