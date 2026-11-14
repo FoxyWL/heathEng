@@ -18,7 +18,7 @@ if (process.getuid && process.getuid() !== 0) {
   process.exit(0);
 }
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'hearth-inst-'));
-const env = { ...process.env, HEARTH_RELAY_DIR: path.join(tmp, 'opt'), HEARTH_RELAY_ENV: path.join(tmp, 'relay.env'), HEARTH_NO_SYSTEMD: '1', HEARTH_RELAY_SRC: root, PUBLIC_HOST: '127.0.0.1', CONTROL_PORT: '17620', PORT_MIN: '17621', PORT_MAX: '17625', DISCOVERY_PORT: '0' };
+const env = { ...process.env, HEARTH_RELAY_DIR: path.join(tmp, 'opt'), HEARTH_RELAY_ENV: path.join(tmp, 'relay.env'), HEARTH_NO_SYSTEMD: '1', HEARTH_RELAY_SRC: root, PUBLIC_HOST: '127.0.0.1', CONTROL_PORT: '17620', PORT_MIN: '17621', PORT_MAX: '17625', VHOST_PORT: '17626', DISCOVERY_PORT: '0' };
 delete env.RELAY_TOKEN;
 const run = (args = []) => spawnSync('bash', [path.join(root, 'relay/install.sh'), ...args], { env, encoding: 'utf8', timeout: 60000 });
 const tokenOf = (s) => (/token=([0-9a-f]+)/.exec(s) || [])[1];
@@ -33,6 +33,10 @@ const tokenOf = (s) => (/token=([0-9a-f]+)/.exec(s) || [])[1];
     assert(p.host === '127.0.0.1' && p.port === 17620 && p.token.length === 24, link);
     assert(fs.existsSync(path.join(tmp, 'opt/relay/relay.js')) && fs.existsSync(path.join(tmp, 'opt/shared/util.js')));
     assert.strictEqual((fs.statSync(path.join(tmp, 'relay.env')).mode & 0o777).toString(8), '600', 'файл с токеном закрыт для других');
+    const envTxt = fs.readFileSync(path.join(tmp, 'relay.env'), 'utf8');
+    assert(/^RELAY_DOMAIN=127-0-0-1\.sslip\.io$/m.test(envTxt) && /^VHOST_PORT=17626$/m.test(envTxt), envTxt);
+    assert(r.stdout.includes('название.127-0-0-1.sslip.io'), 'в итоге напечатан адрес-имя');
+    ok('имена работают сразу: домен по умолчанию — sslip.io от IP сервера, общий порт включён');
     ok('одна команда: релей установлен и запущен, напечатана ссылка hearth-relay://, файл с токеном доступен только root');
 
     const c = new TunnelClient();

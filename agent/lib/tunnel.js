@@ -18,6 +18,7 @@ class TunnelClient extends EventEmitter {
     this.udp = new Map();
     this.latency = 0; // отклик релея, мс (0 — нет данных)
     this.pingAt = 0;
+    this.info = { domain: '', vhostPort: 0 }; // что релей сообщил о себе при входе: домен и общий порт с именами
   }
 
   _event(t, msg, kind) {
@@ -88,6 +89,7 @@ class TunnelClient extends EventEmitter {
       case 'ok':
         this.retry = 0;
         this.lastErr = '';
+        this.info = { domain: m.domain || '', vhostPort: +m.vhostPort || 0 };
         this._setStatus('online');
         this._ping();
         this.pingTimer = setInterval(() => this._ping(), 5000);
@@ -138,10 +140,17 @@ class TunnelClient extends EventEmitter {
     send(this.sock, {
       t: 'open',
       id: t.id,
-      proto: t.proto,
+      proto: this._via(t),
       subdomain: t.subdomain,
+      hint: !!t.hint, // имя только пожелание: если занято, релей выдаст другое
       remotePort: t.remotePort,
     });
+  }
+
+  /** Как открыть туннель на самом деле: TCP по имени (общий порт), если игра это умеет и релей это предлагает. */
+  _via(t) {
+    if (t.proto === 'tcp' && t.prefer === 'vhost' && this.info.vhostPort) return 'vhost';
+    return t.proto;
   }
 
   add(spec) {
@@ -151,6 +160,8 @@ class TunnelClient extends EventEmitter {
       localPort: spec.localPort,
       subdomain: spec.subdomain || '',
       remotePort: spec.remotePort || 0,
+      prefer: spec.prefer || '',
+      hint: !!spec.hint,
       info: null,
       error: '',
       stats: { rx: 0, tx: 0, conns: 0, total: 0, since: 0 },
@@ -177,6 +188,7 @@ class TunnelClient extends EventEmitter {
     return [...this.tunnels.values()].map((t) => ({
       id: t.id,
       proto: t.proto,
+      via: this._via(t),
       localPort: t.localPort,
       subdomain: t.subdomain,
       remotePort: t.remotePort,

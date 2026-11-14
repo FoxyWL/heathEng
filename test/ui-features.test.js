@@ -616,8 +616,12 @@ async function main() {
     });
     await page.click('.rail-link:has-text("Туннели")');
     await page.click('[data-sect=relayhost] summary');
+    await page.check('[data-act=relayhost-vhost]'); // общий порт с именами
+    await page.waitForFunction(() => document.querySelector('[data-act=relayhost-vhost]').checked);
     await page.click('[data-act=relayhost-start]');
     await page.waitForSelector('[data-role=relayhost-link]', { timeout: 15000 });
+    assert(/25565/.test(await page.textContent('[data-role=relayhost-vhost]')), 'shared named port is shown');
+    assert(maps.has('25565'), 'shared port opened on the router');
     const link = await page.textContent('[data-role=relayhost-link]');
     assert(/^hearth-relay:\/\/203\.0\.113\.7:17137\?token=[0-9a-f]+$/.test(link), link);
     assert(maps.has('17137') && maps.has('17138') && maps.has('17139'), 'ports open on the router: ' + [...maps.keys()].join());
@@ -626,7 +630,8 @@ async function main() {
     await page.waitForSelector('[data-act=relayhost-start]');
     await page.waitForFunction(() => true);
     for (let i = 0; i < 30 && maps.has('17137'); i++) await new Promise((r) => setTimeout(r, 200));
-    assert(!maps.has('17137') && !maps.has('17138'), 'router ports closed');
+    assert(!maps.has('17137') && !maps.has('17138') && !maps.has('25565'), 'router ports closed');
+    await page.uncheck('[data-act=relayhost-vhost]');
   });
   await step('public name: sslip.io name instead of IP, then back to plain IP', async () => {
     await page.click('.rail-link:has-text("Сеть")');

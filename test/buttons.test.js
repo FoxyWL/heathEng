@@ -510,7 +510,8 @@ async function main() {
     await page.click('.srv:has-text("Свой сервер 2")');
     await page.click('.invite .btn.flame');
     await page.waitForSelector('.invite .addr:not(.dim)', { timeout: 7000 });
-    assert(/127\.0\.0\.1:\d+/.test(await page.textContent('.invite .addr')));
+    const addrText = await page.textContent('.invite .addr');
+    assert(/127\.0\.0\.1:\d+/.test(addrText), 'address: ' + addrText);
     assert((await page.locator('.invite.fresh').count()) === 1, 'glow class on new address');
     await page.click('.invite .btn:has-text("Скопировать")');
     await page.waitForSelector('.invite .btn.ok');

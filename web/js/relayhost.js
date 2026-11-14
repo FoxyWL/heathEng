@@ -39,7 +39,8 @@ export function relayHostBox() {
         v.warning ? h('p', { class: 'tone-warn', 'data-role': 'relayhost-warning' }, v.warning) : null,
         v.link ? h('div', { class: 'addr-row main' }, h('code', { class: 'addr', 'data-role': 'relayhost-link' }, v.link), h('button', { class: 'btn sm', 'data-act': 'relayhost-copy', on: { click: (e) => copy(v.link, e.currentTarget) } }, icon('copy', 14), T('Копировать ссылку', 'Copy the link'))) : null,
         h('p', { class: 'muted' }, T(`Порт управления ${v.controlPort} (TCP) и порты туннелей ${v.portMin}–${v.portMax} (TCP и UDP). Ссылка содержит токен: отправляйте её только тем, кому доверяете.`, `Control port ${v.controlPort} (TCP) and tunnel ports ${v.portMin}–${v.portMax} (TCP and UDP). The link contains a token: send it only to people you trust.`)),
-        v.verdict === 'manual' ? h('p', { class: 'muted' }, T(`Пробросьте на этот ПК: ${v.controlPort}/TCP и ${v.portMin}–${v.portMax} по TCP и UDP.`, `Forward to this PC: ${v.controlPort}/TCP and ${v.portMin}–${v.portMax} on TCP and UDP.`)) : null,
+        v.vhostPort ? h('p', { class: 'muted', 'data-role': 'relayhost-vhost' }, T(`Общий порт с именами: ${v.vhostPort}/TCP. Minecraft Java, HTTPS и сайты получают адрес вида название.домен без отдельного порта.`, `Shared named port: ${v.vhostPort}/TCP. Minecraft Java, HTTPS and websites get an address like name.domain without a separate port.`)) : null,
+        v.verdict === 'manual' ? h('p', { class: 'muted' }, T(`Пробросьте на этот ПК: ${v.controlPort}/TCP${v.vhostPort ? ', ' + v.vhostPort + '/TCP' : ''} и ${v.portMin}–${v.portMax} по TCP и UDP.`, `Forward to this PC: ${v.controlPort}/TCP${v.vhostPort ? ', ' + v.vhostPort + '/TCP' : ''} and ${v.portMin}–${v.portMax} on TCP and UDP.`)) : null,
         h('p', { class: 'muted' }, T('При первом запуске Windows может спросить разрешение брандмауэра для Hearth: разрешите доступ.', 'On the first start Windows may ask for a firewall permission for Hearth: allow it.')),
         h('div', { class: 'row-actions' },
           h('button', { class: 'btn', 'data-act': 'relayhost-stop', on: { click: act('/api/relayhost/stop', T('Релей остановлен', 'Relay stopped')) } }, T('Остановить релей', 'Stop the relay')),
@@ -52,6 +53,9 @@ export function relayHostBox() {
       body.push(
         v.error ? h('p', { class: 'tone-bad', 'data-role': 'relayhost-error' }, v.error) : null,
         h('p', { class: 'muted' }, T(`Порт управления ${v.controlPort}, порты туннелей ${v.portMin}–${v.portMax}.`, `Control port ${v.controlPort}, tunnel ports ${v.portMin}–${v.portMax}.`)),
+        h('label', { class: 'check', title: T('На порту 25565 релей читает имя из подключения. Не включайте, если на этом же ПК уже работает Minecraft-сервер на 25565.', 'On port 25565 the relay reads the name from the connection. Do not enable it if a Minecraft server on this PC already uses 25565.') },
+          h('input', { type: 'checkbox', 'data-act': 'relayhost-vhost', checked: !!v.vhostPort, on: { change: click(async (e) => { set(await api('PUT', '/api/relayhost', { vhostPort: e.target.checked ? 25565 : 0 })); }) } }),
+          ' ', T('Имена на общем порту 25565 (Minecraft Java, HTTPS, сайты)', 'Names on the shared port 25565 (Minecraft Java, HTTPS, websites)')),
         h('div', { class: 'row-actions' }, h('button', { class: 'btn primary', 'data-act': 'relayhost-start', on: { click: click(async () => {
           set({ ...v, starting: true, error: '' });
           try {

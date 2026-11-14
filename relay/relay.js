@@ -19,6 +19,7 @@ const cfg = {
   portMax: +(process.env.PORT_MAX || 29999),
   maxTunnels: +(process.env.MAX_TUNNELS || 16),
   bind: process.env.BIND || '0.0.0.0',
+  vhostPort: +(process.env.VHOST_PORT || 0), // общий порт, где имя берётся из первых байт (Minecraft Java, TLS, HTTP); 0 — выключен
   discoveryPort: process.env.DISCOVERY_PORT === undefined ? 7001 : +process.env.DISCOVERY_PORT, // 0 — не отвечать на поиск
   open: process.env.RELAY_OPEN === '1', // без токена: только для домашней или закрытой сети
 };
@@ -30,10 +31,11 @@ if (!cfg.token && !cfg.open) {
 const tokenOk = (t) => cfg.open || t === cfg.token;
 
 /** Что релей сообщает о себе тем, кто его ищет (клиентам Hearth). Токен не раскрывается. */
-const about = () => ({ hearthRelay: 1, name: cfg.domain, host: cfg.publicHost, port: cfg.controlPort, tokenRequired: !cfg.open });
+const about = () => ({ hearthRelay: 1, name: cfg.domain, host: cfg.publicHost, port: cfg.controlPort, tokenRequired: !cfg.open, vhostPort: cfg.vhostPort || 0, domain: cfg.domain });
 
 const clients = new Set();
 const httpTunnels = new Map();
+const vhostTunnels = new Map();
 const pending = new Map();
 let tidSeq = 1;
 
@@ -136,6 +138,161 @@ function handleHttpSocket(sock) {
   sock.on('close', () => clearTimeout(timer));
 }
 
+
+// ---- Общий порт с маршрутизацией по имени -------------------------------------------------------
+// Имя, по которому человек подключился, видно в первых байтах только у некоторых протоколов:
+// рукопожатие Minecraft Java, TLS (SNI) и HTTP (Host). У UDP-игр (Bedrock и др.) и большинства
+// остальных TCP-игр имени в пакете нет, поэтому им нужен отдельный порт.
+function readVarInt(b, o) {
+  let v = 0;
+  for (let i = 0; i < 5; i++) {
+    if (o + i >= b.length) return null;
+    const c = b[o + i];
+    v |= (c & 0x7f) << (7 * i);
+    if (!(c & 0x80)) return { v, len: i + 1 };
+  }
+  return { v: -1, len: 5 };
+}
+
+function sniffMinecraft(b) {
+  const len = readVarInt(b, 0);
+  if (!len) return { need: true };
+  if (len.v < 3 || len.v > 300) return null;
+  if (b.length < len.len + len.v) return { need: true };
+  let o = len.len;
+  if (b[o] !== 0x00) return null;
+  o++;
+  const proto = readVarInt(b, o);
+  if (!proto) return null;
+  o += proto.len;
+  const sl = readVarInt(b, o);
+  if (!sl || sl.v < 1 || sl.v > 255) return null;
+  o += sl.len;
+  if (o + sl.v + 3 > len.len + len.v + 1) return null;
+  const host = b.toString('utf8', o, o + sl.v).split('\0')[0]; // Forge дописывает после \0 свою метку
+  o += sl.v + 2;
+  const next = readVarInt(b, o);
+  return { kind: 'minecraft', host, next: next ? next.v : 0, proto: proto.v, used: len.len + len.v };
+}
+
+function sniffTls(b) {
+  if (b.length < 5) return { need: true };
+  const recLen = b.readUInt16BE(3);
+  if (b.length < 5 + Math.min(recLen, 16384)) return { need: true };
+  try {
+    let o = 5;
+    if (b[o] !== 0x01) return null;
+    o += 4 + 2 + 32; // тип и длина рукопожатия, версия, random
+    o += 1 + b[o]; // session id
+    o += 2 + b.readUInt16BE(o); // шифры
+    o += 1 + b[o]; // сжатие
+    const end = o + 2 + b.readUInt16BE(o);
+    o += 2;
+    while (o + 4 <= end) {
+      const type = b.readUInt16BE(o);
+      const l = b.readUInt16BE(o + 2);
+      if (type === 0) {
+        // server_name_list: длина списка, тип (0), длина имени, имя
+        const nl = b.readUInt16BE(o + 7);
+        return { kind: 'tls', host: b.toString('latin1', o + 9, o + 9 + nl) };
+      }
+      o += 4 + l;
+    }
+  } catch {}
+  return { kind: 'tls', host: '' };
+}
+
+function sniffHttp(b) {
+  const end = b.indexOf('\r\n\r\n');
+  if (end < 0) return b.length > 16384 ? null : { need: true };
+  const m = /\r\nhost:\s*([^\r\n:]+)/i.exec(b.toString('latin1', 0, end));
+  return { kind: 'http', host: m ? m[1].trim() : '' };
+}
+
+/** null — не наш протокол; {need:true} — ждём ещё байты; иначе {kind, host, ...} */
+function sniffHost(b) {
+  if (!b.length) return { need: true };
+  if (b[0] === 0x16) return sniffTls(b);
+  if (b[0] >= 0x41 && b[0] <= 0x5a) return sniffHttp(b); // GET, POST, HEAD…
+  return sniffMinecraft(b);
+}
+
+function subOf(host) {
+  host = String(host || '').toLowerCase().replace(/\.$/, '');
+  return host.endsWith('.' + cfg.domain) ? host.slice(0, -cfg.domain.length - 1) : '';
+}
+
+const mcStr = (s) => {
+  const b = Buffer.from(s, 'utf8');
+  return Buffer.concat([varInt(b.length), b]);
+};
+function varInt(n) {
+  const out = [];
+  do {
+    let c = n & 0x7f;
+    n >>>= 7;
+    if (n) c |= 0x80;
+    out.push(c);
+  } while (n);
+  return Buffer.from(out);
+}
+const mcPacket = (id, body) => {
+  const inner = Buffer.concat([varInt(id), body]);
+  return Buffer.concat([varInt(inner.length), inner]);
+};
+
+/** Ответ тому, кто пришёл по имени без туннеля, на его языке: Minecraft получит понятное сообщение в списке серверов и при входе */
+function replyUnknown(sock, info, host, buf) {
+  const text = `Сервер «${host || '?'}» не найден или выключен. Проверьте адрес у хозяина сервера.`;
+  if (info.kind === 'minecraft') {
+    if (info.next === 1) {
+      const status = { version: { name: 'Hearth', protocol: info.proto }, players: { max: 0, online: 0 }, description: { text } };
+      sock.write(mcPacket(0, mcStr(JSON.stringify(status))));
+      const echo = (d) => {
+        const i = d.indexOf(Buffer.from([0x09, 0x01])); // ping: длина 9, id 1, 8 байт
+        if (i < 0 || d.length < i + 10) return false;
+        sock.end(d.subarray(i, i + 10));
+        return true;
+      };
+      if (!echo(buf.subarray(info.used))) sock.on('data', echo);
+      setTimeout(() => sock.destroy(), 5000).unref();
+      sock.resume();
+      return;
+    }
+    sock.end(mcPacket(0, mcStr(JSON.stringify({ text }))));
+    return;
+  }
+  if (info.kind === 'http') return sock.end(httpPage('404 Not Found', text));
+  sock.destroy(); // TLS без сервера: честный разрыв, подменять сертификат нельзя
+}
+
+function handleVhostSocket(sock) {
+  let buf = Buffer.alloc(0);
+  const timer = setTimeout(() => sock.destroy(), 10000);
+  sock.on('error', () => {});
+  sock.on('close', () => clearTimeout(timer));
+  const onData = (d) => {
+    buf = Buffer.concat([buf, d]);
+    const info = sniffHost(buf);
+    if (info && info.need) {
+      if (buf.length > 16384) sock.destroy();
+      return;
+    }
+    sock.removeListener('data', onData);
+    clearTimeout(timer);
+    sock.pause();
+    if (!info) return sock.destroy();
+    if (info.kind === 'http' && /^GET \/\.well-known\/hearth-relay[ ?]/.test(buf.toString('latin1', 0, 64))) {
+      const body = JSON.stringify(about());
+      return sock.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\naccess-control-allow-origin: *\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
+    }
+    const t = vhostTunnels.get(subOf(info.host));
+    if (!t) return replyUnknown(sock, info, info.host, buf);
+    routeToClient(t.client, t, sock, buf);
+  };
+  sock.on('data', onData);
+}
+
 async function openTunnel(client, msg) {
   if (client.tunnels.size >= cfg.maxTunnels) throw new Error('лимит туннелей');
   if (client.tunnels.has(msg.id)) closeTunnel(client, msg.id);
@@ -159,6 +316,20 @@ async function openTunnel(client, msg) {
       port,
       url: `${secure ? 'https' : 'http'}://${host}${(secure && port === 443) || (!secure && port === 80) ? '' : ':' + port}`,
     };
+  } else if (proto === 'vhost') {
+    if (!cfg.vhostPort) throw new Error('на этом релее нет общего порта с именами');
+    let sub = String(msg.subdomain || '').toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40);
+    if (!sub) sub = crypto.randomBytes(4).toString('hex');
+    const ex = vhostTunnels.get(sub);
+    if (ex && ex.client !== client) {
+      if (msg.subdomain && !msg.hint) throw new Error('имя занято');
+      sub = crypto.randomBytes(4).toString('hex');
+    }
+    tunnel.sub = sub;
+    tunnel.vhost = true;
+    vhostTunnels.set(sub, tunnel);
+    const host = `${sub}.${cfg.domain}`;
+    tunnel.info = { host, port: cfg.vhostPort, url: `${host}:${cfg.vhostPort}` };
   } else if (proto === 'tcp') {
     const { server, port } = await allocPort('tcp', msg.remotePort);
     tunnel.server = server;
@@ -209,6 +380,7 @@ function closeTunnel(client, id) {
   if (!t) return;
   client.tunnels.delete(id);
   if (t.sub && httpTunnels.get(t.sub) === t) httpTunnels.delete(t.sub);
+  if (t.sub && vhostTunnels.get(t.sub) === t) vhostTunnels.delete(t.sub);
   if (t.gc) clearInterval(t.gc);
   if (t.dataSock) t.dataSock.destroy();
   if (t.server) {
@@ -226,7 +398,7 @@ function handleControl(sock, hello, rest) {
   }
   const client = { sock, tunnels: new Map(), name: String(hello.name || 'client').slice(0, 40) };
   clients.add(client);
-  send(sock, { t: 'ok', domain: cfg.domain });
+  send(sock, { t: 'ok', domain: cfg.domain, vhostPort: cfg.vhostPort || 0 });
   console.log(`[relay] клиент подключён: ${client.name}`);
   const feed = lineParser(async (msg) => {
     if (msg.t === 'ping') return send(sock, { t: 'pong' });
@@ -317,6 +489,11 @@ async function main() {
   const httpSrv = net.createServer(handleHttpSocket);
   await listen(httpSrv, cfg.httpPort);
   console.log(`[relay] http :${cfg.httpPort}  домен *.${cfg.domain}`);
+  if (cfg.vhostPort) {
+    const vh = net.createServer(handleVhostSocket);
+    await listen(vh, cfg.vhostPort);
+    console.log(`[relay] имена на общем порту :${cfg.vhostPort}  *.${cfg.domain} (Minecraft Java, TLS, HTTP)`);
+  }
   if (cfg.httpsPort && cfg.cert && cfg.key) {
     const httpsSrv = tls.createServer(
       { cert: fs.readFileSync(cfg.cert), key: fs.readFileSync(cfg.key) },

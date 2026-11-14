@@ -11,7 +11,7 @@ import { S, fill, setTun, ui } from './state.js';
 // Туннели: релей, список с живым трафиком, подробности выбранного туннеля, открытие любого порта.
 
 const stText = () => ({ online: T('подключено', 'connected'), connecting: T('подключаюсь…', 'connecting…'), reconnecting: T('переподключаюсь…', 'reconnecting…'), error: T('ошибка', 'error'), idle: T('выключено', 'off') });
-const protoName = (p) => (p === 'http' ? 'HTTP(S)' : (p || '').toUpperCase());
+const protoName = (p) => (p === 'http' ? 'HTTP(S)' : p === 'vhost' ? T('TCP по имени', 'TCP by name') : (p || '').toUpperCase());
 const ago = (ts) => {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   return s < 60 ? T(`${s} с назад`, `${s}s ago`) : s < 3600 ? T(`${Math.floor(s / 60)} мин назад`, `${Math.floor(s / 60)}m ago`) : clock(ts);
@@ -40,7 +40,7 @@ function detail(t) {
   const events = (t.events || []).slice().reverse();
   box.append(
     h('div', { class: 'sect-head' }, h('h3', {}, t.name), h('span', { class: 'tag' }, protoName(t.proto) + ' · ' + T('локальный порт ', 'local port ') + t.localPort)),
-    t.info ? h('div', { class: 'addr-row main' }, h('code', { class: 'addr' }, t.info.url), h('button', { class: 'btn sm', on: { click: (e) => copy(t.info.url, e.currentTarget) } }, T('Копировать', 'Copy'))) : h('p', { class: 'muted' }, t.error || T('ожидание адреса…', 'waiting for an address…')),
+    t.info ? h('div', { class: 'addr-row main' }, h('code', { class: 'addr' }, t.nameUrl || t.info.url), h('button', { class: 'btn sm', on: { click: (e) => copy(t.nameUrl || t.info.url, e.currentTarget) } }, T('Копировать', 'Copy')), t.nameUrl ? h('button', { class: 'btn sm ghost', title: t.info.url, on: { click: (e) => copy(t.info.url, e.currentTarget) } }, T('Адрес с IP', 'Address with IP')) : null) : h('p', { class: 'muted' }, t.error || T('ожидание адреса…', 'waiting for an address…')),
     chartHost, nums,
     h('h4', {}, T('События', 'Events')),
     events.length ? h('ul', { class: 'events' }, events.slice(0, 12).map((e) => h('li', { class: e.kind }, h('time', {}, ago(e.ts)), e.msg))) : h('p', { class: 'muted' }, T('Пока ничего не происходило.', 'Nothing has happened yet.')));
@@ -62,7 +62,7 @@ export function tunnelsPage() {
     renderRail();
     renderMain();
   }));
-  const proto = h('select', {}, [['tcp', 'TCP'], ['udp', 'UDP'], ['http', 'HTTP(S)']].map(([v, l]) => h('option', { value: v }, l)));
+  const proto = h('select', {}, [['tcp', 'TCP'], ['udp', 'UDP'], ['http', 'HTTP(S)'], ['vhost', T('TCP по имени (Minecraft Java, HTTPS)', 'TCP by name (Minecraft Java, HTTPS)')]].map(([v, l]) => h('option', { value: v }, l)));
   const lport = h('input', { type: 'number', min: 1, max: 65535, placeholder: '3000' });
   const sub = h('input', { type: 'text', placeholder: T('необязательно', 'optional'), spellcheck: false });
   const nm = h('input', { type: 'text', placeholder: T('Мой сайт', 'My site') });

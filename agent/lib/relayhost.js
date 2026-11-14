@@ -10,6 +10,12 @@ const netaccess = require('./netaccess');
 const RELAY_JS = path.join(__dirname, '..', '..', 'relay', 'relay.js');
 const MAX_LOG = 60;
 
+/** Домен релея: для голого IP — sslip.io (метка.203-0-113-7.sslip.io сама указывает на этот IP), для имени — оно же. */
+function domainFor(host) {
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host || '');
+  return m ? `${m[1]}-${m[2]}-${m[3]}-${m[4]}.sslip.io` : host;
+}
+
 class RelayHost {
   constructor({ store, emit, renewMs = +process.env.HEARTH_PUBLIC_RENEW_MS || 20 * 60 * 1000 }) {
     Object.assign(this, { store, emit, renewMs });
@@ -36,6 +42,7 @@ class RelayHost {
       link: this.s.link,
       host: this.s.host,
       controlPort: +c.controlPort,
+      vhostPort: +c.vhostPort || 0,
       portMin: +c.portMin,
       portMax: +c.portMax,
       verdict: this.s.verdict,
@@ -59,7 +66,7 @@ class RelayHost {
     let warning = '';
     if (chk.verdict === 'upnp' || chk.verdict === 'manual') host = chk.ip || host;
     if (chk.verdict === 'cgnat') warning = 'У вас «серый» адрес провайдера (CGNAT): из интернета до этого ПК не достучаться. Релей будет работать только для устройств в вашей сети. Для друзей из интернета нужен VPS.';
-    else if (chk.verdict === 'manual') warning = `Роутер без UPnP: пробросьте на этот ПК порты ${this.cfg.controlPort}/TCP и ${this.cfg.portMin}–${this.cfg.portMax} (TCP и UDP) вручную.`;
+    else if (chk.verdict === 'manual') warning = `Роутер без UPnP: пробросьте на этот ПК порты ${this.cfg.controlPort}/TCP и ${this.cfg.portMin}–${this.cfg.portMax} (TCP и UDP)${+this.cfg.vhostPort ? ` и ${this.cfg.vhostPort}/TCP` : ''} вручную.`;
     else if (chk.verdict === 'unknown') warning = 'Нет связи с интернетом: релей доступен только в вашей сети.';
     return { host, lan: lan ? lan.ip : '', verdict: chk.verdict, warning };
   }
@@ -127,10 +134,11 @@ class RelayHost {
         PORT_MIN: String(c.portMin),
         PORT_MAX: String(c.portMax),
         PUBLIC_HOST: plan.host,
-        RELAY_DOMAIN: plan.host,
+        RELAY_DOMAIN: domainFor(plan.host),
         MAX_TUNNELS: String(c.maxTunnels || 16),
       };
       delete env.RELAY_OPEN;
+      if (+c.vhostPort) env.VHOST_PORT = String(c.vhostPort); // общий порт с именами: Minecraft Java, TLS, HTTP
       if (process.env.HEARTH_RELAY_DISCOVERY !== undefined) env.DISCOVERY_PORT = process.env.HEARTH_RELAY_DISCOVERY;
       const child = spawn(process.execPath, [RELAY_JS], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
       this.child = child;
@@ -178,6 +186,7 @@ class RelayHost {
     if (gen !== this.gen) return;
     if (!this.gw) throw new Error('роутер с UPnP не найден');
     const want = [{ port: +c.controlPort, proto: 'tcp' }];
+    if (+c.vhostPort) want.push({ port: +c.vhostPort, proto: 'tcp' });
     for (let p = +c.portMin; p <= +c.portMax; p++) want.push({ port: p, proto: 'tcp' }, { port: p, proto: 'udp' });
     const lanIp = plan.lan || plan.host;
     for (const w of want) {
@@ -253,10 +262,16 @@ class RelayHost {
     if (this.cfg.enabled && process.env.HEARTH_RELAYHOST_AUTO !== '0') this.start().catch(() => {});
   }
 
-  setPorts({ portMin, portMax, controlPort }) {
+  setPorts({ portMin, portMax, controlPort, vhostPort }) {
     const c = this.cfg;
     const n = (v, d) => (Number.isInteger(+v) && +v >= 1024 && +v <= 65535 ? +v : d);
     const next = { controlPort: n(controlPort, c.controlPort), portMin: n(portMin, c.portMin), portMax: n(portMax, c.portMax) };
+    if (vhostPort !== undefined) {
+      const v = +vhostPort || 0;
+      if (v && !(Number.isInteger(v) && v >= 1024 && v <= 65535)) throw Object.assign(new Error('общий порт: число от 1024 до 65535 или 0 (выключен)'), { status: 400 });
+      next.vhostPort = v;
+    } else next.vhostPort = +c.vhostPort || 0;
+    if (next.vhostPort && (next.vhostPort === next.controlPort || (next.vhostPort >= next.portMin && next.vhostPort <= next.portMax))) throw Object.assign(new Error('общий порт не должен совпадать с портом управления или попадать в диапазон'), { status: 400 });
     if (next.portMax < next.portMin) throw Object.assign(new Error('конец диапазона меньше начала'), { status: 400 });
     if (next.portMax - next.portMin > 99) throw Object.assign(new Error('диапазон не больше 100 портов'), { status: 400 });
     if (next.controlPort >= next.portMin && next.controlPort <= next.portMax) throw Object.assign(new Error('порт управления не должен попадать в диапазон'), { status: 400 });
@@ -268,4 +283,4 @@ class RelayHost {
   }
 }
 
-module.exports = { RelayHost };
+module.exports = { RelayHost, domainFor };

@@ -125,22 +125,26 @@ export function renderInvite() {
   const extra = mine.filter((x) => x !== t);
   const lan = S.net && S.net.addresses.find((x) => x.primary);
   const lanPort = lan && portOf(s);
-  const sig = JSON.stringify([s.id, s.game, s.tunnel.enabled, r.enabled, r.host, r.status, r.error, lan && lan.ip, lanPort, s.netName, s.publicIp && s.publicIp.ext, s.publicIp && s.publicIp.host, s.publicIp && s.publicIp.error, mine.map((x) => [x.id, x.info && x.info.url, x.error, x.name])]);
+  const sig = JSON.stringify([s.id, s.game, s.tunnel.enabled, r.enabled, r.host, r.status, r.error, lan && lan.ip, lanPort, s.netName, s.publicIp && s.publicIp.ext, s.publicIp && s.publicIp.host, s.publicIp && s.publicIp.error, mine.map((x) => [x.id, x.info && x.info.url, x.nameUrl, x.via, x.error, x.name])]);
   if (ui.inviteSig === sig && ui.invite.firstChild) return;
   ui.inviteSig = sig;
   const row = [h('div', { class: 'lbl' }, T('Адрес для друзей', 'Address for friends'))];
   let fresh = false;
   let howto = null;
   if (t && t.info) {
-    row.push(h('div', { class: 'addr' }, t.info.url));
-    row.push(h('button', { class: 'btn', title: T('Скопировать адрес', 'Copy the address'), on: { click: (e) => copy(t.info.url, e.currentTarget) } }, T('Скопировать', 'Copy')));
+    const shown = t.nameUrl || t.info.url;
+    row.push(h('div', { class: 'addr', 'data-role': 'main-addr' }, shown));
+    row.push(h('button', { class: 'btn', title: T('Скопировать адрес', 'Copy the address'), on: { click: (e) => copy(shown, e.currentTarget) } }, T('Скопировать', 'Copy')));
+    if (t.nameUrl) row.push(h('button', { class: 'btn ghost', title: t.info.url, on: { click: (e) => copy(t.info.url, e.currentTarget) } }, T('С IP', 'With IP')));
     row.push(h('button', { class: 'btn ghost', title: T('Закрыть публичный доступ', 'Close public access'), on: { click: click(async () => { await api('PATCH', `/api/servers/${s.id}`, { tunnel: { enabled: false } }); }) } }, T('Выключить', 'Turn off')));
-    fresh = S.seenAddr[s.id] !== t.info.url;
-    S.seenAddr[s.id] = t.info.url;
-    if (isMc(s)) howto = T('Друзьям: Minecraft → «Сетевая игра» → «Прямое подключение» → вставить адрес.', 'For friends: Minecraft → “Multiplayer” → “Direct Connection” → paste the address.');
+    fresh = S.seenAddr[s.id] !== shown;
+    S.seenAddr[s.id] = shown;
+    if (t.via === 'vhost') howto = T(`Друзьям: Minecraft → «Сетевая игра» → «Прямое подключение» → ввести имя${t.info.port === 25565 ? ' (порт 25565 у игры по умолчанию, писать его не нужно)' : ' вместе с портом'}. Ничего скачивать не нужно.`, `For friends: Minecraft → “Multiplayer” → “Direct Connection” → type the name${t.info.port === 25565 ? ' (25565 is the default port, no need to type it)' : ' with the port'}. Nothing to download.`);
+    else if (isMc(s)) howto = T('Друзьям: Minecraft → «Сетевая игра» → «Прямое подключение» → вставить адрес.', 'For friends: Minecraft → “Multiplayer” → “Direct Connection” → paste the address.');
     else if (t.proto === 'http') howto = T('Откройте этот адрес в любом браузере.', 'Open this address in any browser.');
     else if (['cs16', 'czero', 'dod', 'cs2', 'tf2', 'gmod', 'l4d2', 'svencoop'].includes(s.game)) howto = T('Друзьям: в консоли игры (~) ввести connect и адрес.', 'For friends: in the game console (~) type connect and the address.');
     else howto = T('Друзьям: вставить адрес в прямое подключение или в консоль игры.', 'For friends: paste the address into the direct-connect box or the game console.');
+    if (t.nameUrl && t.via !== 'vhost') howto += ' ' + T('Имя ведёт на релей, а порт выбирает именно этот сервер: у этой игры имени в подключении нет, поэтому порт нужен всегда.', 'The name leads to the relay and the port picks this server: this game does not send a name when connecting, so the port is always required.');
   } else if (!r.enabled || !r.host) {
     row.push(h('div', { class: 'addr dim' }, T('Друзья пока не смогут подключиться: туннель не настроен.', 'Friends cannot connect yet: the tunnel is not set up.')));
     row.push(h('button', { class: 'btn flame', on: { click: () => go('tunnels') } }, T('Настроить туннель', 'Set up the tunnel')));

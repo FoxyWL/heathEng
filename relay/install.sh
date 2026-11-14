@@ -4,7 +4,9 @@
 # Ставит Node.js (если нет), скачивает релей в /opt/hearth-relay, создаёт службу systemd, открывает порты в ufw/firewalld
 # и печатает ссылку-приглашение для Hearth. Повторный запуск обновляет релей и оставляет прежний токен.
 # Удаление: curl -fsSL .../install.sh | sudo bash -s -- --uninstall
-# Переменные: PUBLIC_HOST (адрес для друзей, по умолчанию внешний IP), CONTROL_PORT (7000), PORT_MIN/PORT_MAX (20000/20100), RELAY_TOKEN.
+# Переменные: PUBLIC_HOST (адрес для друзей, по умолчанию внешний IP), CONTROL_PORT (7000), PORT_MIN/PORT_MAX (20000/20100), RELAY_TOKEN,
+# VHOST_PORT (общий порт с именами для Minecraft Java, HTTPS и сайтов, по умолчанию 25565; 0 — выключить),
+# RELAY_DOMAIN (свой домен с wildcard-DNS *.домен -> этот сервер; по умолчанию метка.IP-через-дефисы.sslip.io, регистрации не нужно).
 set -euo pipefail
 
 REPO_RAW="${HEARTH_RAW:-https://raw.githubusercontent.com/FoxyWL/heathEng/main}"
@@ -14,6 +16,7 @@ SERVICE=hearth-relay
 CONTROL_PORT="${CONTROL_PORT:-7000}"
 PORT_MIN="${PORT_MIN:-20000}"
 PORT_MAX="${PORT_MAX:-20100}"
+VHOST_PORT="${VHOST_PORT:-25565}"
 
 say() { printf '\n==> %s\n' "$*"; }
 die() { printf '\nОшибка: %s\n' "$*" >&2; exit 1; }
@@ -77,11 +80,22 @@ TOKEN="${RELAY_TOKEN:-}"
 if [ -z "$TOKEN" ] && [ -f "$ENV_FILE" ]; then TOKEN=$(sed -n 's/^RELAY_TOKEN=//p' "$ENV_FILE" | head -n1); fi
 if [ -z "$TOKEN" ]; then TOKEN=$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n'); fi
 
+DOMAIN="${RELAY_DOMAIN:-}"
+if [ -z "$DOMAIN" ] && [ -f "$ENV_FILE" ]; then DOMAIN=$(sed -n 's/^RELAY_DOMAIN=//p' "$ENV_FILE" | head -n1); fi
+case "$DOMAIN" in ''|*[!0-9.]*) ;; *) DOMAIN='' ;; esac # прежний «домен» из одного IP (старая установка) заменяем на sslip.io
+if [ -z "$DOMAIN" ]; then
+  case "$PUBLIC_HOST" in
+    *[!0-9.]*) DOMAIN=$PUBLIC_HOST ;;
+    *) DOMAIN="$(printf '%s' "$PUBLIC_HOST" | tr . -).sslip.io" ;;
+  esac
+fi
+
 umask 077
 cat > "$ENV_FILE" <<ENV
 RELAY_TOKEN=$TOKEN
 PUBLIC_HOST=$PUBLIC_HOST
-RELAY_DOMAIN=$PUBLIC_HOST
+RELAY_DOMAIN=$DOMAIN
+VHOST_PORT=$VHOST_PORT
 CONTROL_PORT=$CONTROL_PORT
 PORT_MIN=$PORT_MIN
 PORT_MAX=$PORT_MAX
@@ -127,9 +141,11 @@ if have ufw && ufw status 2>/dev/null | grep -q "Status: active"; then
   ufw allow "$PORT_MIN:$PORT_MAX/tcp" >/dev/null
   ufw allow "$PORT_MIN:$PORT_MAX/udp" >/dev/null
   ufw allow 7001/udp >/dev/null
+  [ "$VHOST_PORT" != 0 ] && ufw allow "$VHOST_PORT/tcp" >/dev/null
 elif have firewall-cmd && firewall-cmd --state >/dev/null 2>&1; then
   say "Открываю порты в firewalld"
   firewall-cmd --permanent --add-port="$CONTROL_PORT/tcp" --add-port="$PORT_MIN-$PORT_MAX/tcp" --add-port="$PORT_MIN-$PORT_MAX/udp" >/dev/null
+  [ "$VHOST_PORT" != 0 ] && firewall-cmd --permanent --add-port="$VHOST_PORT/tcp" >/dev/null
   firewall-cmd --reload >/dev/null
 fi
 
@@ -142,6 +158,9 @@ cat <<DONE
 
   $LINK
 
-Если у хостинга есть свой firewall в панели управления, откройте там: $CONTROL_PORT/tcp и $PORT_MIN-$PORT_MAX по tcp и udp.
+Имена вида  название.$DOMAIN  ведут на этот сервер без регистрации домена.
+$( [ "$VHOST_PORT" != 0 ] && echo "Minecraft Java: друзья вводят  название.$DOMAIN  (порт $VHOST_PORT, у игры он по умолчанию 25565 — писать не надо)." )
+
+Если у хостинга есть свой firewall в панели управления, откройте там: $CONTROL_PORT/tcp$( [ "$VHOST_PORT" != 0 ] && echo ", $VHOST_PORT/tcp" ) и $PORT_MIN-$PORT_MAX по tcp и udp.
 Ссылку никому не показывайте: токен даёт право открывать порты на этом сервере.
 DONE

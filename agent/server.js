@@ -27,7 +27,7 @@ const modrinth = require('./lib/modrinth');
 
 const BIND = process.env.BIND || '127.0.0.1';
 const WEB = path.join(__dirname, '..', 'web');
-const VERSION = '1.5.0';
+const VERSION = '1.6.0';
 // Крючки для оболочки (Electron): системные окна и папки вместо запуска внешних программ.
 const hooks = { openExternal: null, openPath: null };
 const GUI = isGuiExe(); // установленная версия без окна консоли
@@ -58,7 +58,25 @@ const relayHost = new RelayHost({ store, emit });
 const sched = new Scheduler(mgr, emit);
 const tunnel = new TunnelClient();
 const lab = (o) => (o && typeof o === 'object' ? o.ru || o.en : o || '');
-tunnel.on('update', () => emit('tunnels', tunnelView()));
+// Запоминаем выданный порт: при следующем запуске просим тот же, и адрес не меняется
+function rememberPorts() {
+  if (tunnel.status !== 'online') return;
+  let dirty = false;
+  for (const s of store.state.servers) {
+    const t = tunnel.tunnels.get('srv-' + s.id);
+    if (!s.tunnel || !t || !t.info || t.proto === 'http' || tunnel._via(t) === 'vhost') continue;
+    if (!(+s.tunnel.remotePort) && s.tunnel.lastPort !== t.info.port) {
+      s.tunnel.lastPort = t.info.port;
+      t.remotePort = t.info.port; // совпадает с желаемым: туннель не пересоздаётся
+      dirty = true;
+    }
+  }
+  if (dirty) store.saveState();
+}
+tunnel.on('update', () => {
+  rememberPorts();
+  emit('tunnels', tunnelView());
+});
 tunnel.on('latency', () => emit('tunnels', tunnelView()));
 // Трафик туннелей: накопленные счётчики раз в секунду (интерфейс сам считает скорость)
 setInterval(() => {
@@ -74,7 +92,7 @@ function relayCfg() {
 function serverPorts(s) {
   const ports = catalog.portsOf(s.game, s.settings);
   const sel = (s.tunnel && s.tunnel.ports) || {};
-  const mainRemote = +(s.tunnel && s.tunnel.remotePort) || 0;
+  const mainRemote = +(s.tunnel && s.tunnel.remotePort) || +(s.tunnel && s.tunnel.lastPort) || 0; // свой порт, иначе прошлый: адрес не меняется между запусками
   return ports.map((p, i) => ({
     ...p,
     idx: i,
@@ -84,17 +102,33 @@ function serverPorts(s) {
   }));
 }
 
+// Имя на общем порту релей читает из первых байт: это умеют Minecraft Java, TLS и HTTP. UDP-игры и остальные TCP-игры так назвать нельзя.
+const nameRoutable = (s) => (catalog.games[s.game] || {}).kind === 'minecraft';
+
+// Имя работает как адрес, если домен релея сам указывает на релей (sslip.io, DuckDNS) или хозяин настроил wildcard-DNS
+const namesWork = (domain) => !!domain && (/(^|\.)(sslip\.io|nip\.io|duckdns\.org)$/.test(domain) || store.config.relay.wildcard === true);
+
 function desiredTunnels() {
   const out = [];
   for (const s of store.state.servers) {
     if (!s.tunnel || !s.tunnel.enabled) continue;
     for (const p of serverPorts(s)) {
       if (!p.on) continue;
-      out.push({ id: p.id, proto: p.proto, localPort: p.port, subdomain: p.idx === 0 ? s.tunnel.subdomain || '' : '', remotePort: p.remotePort });
+      const main = p.idx === 0;
+      const byName = main && p.proto === 'tcp' && nameRoutable(s) && s.tunnel.byName !== false;
+      out.push({
+        id: p.id,
+        proto: p.proto,
+        localPort: p.port,
+        subdomain: main ? s.tunnel.subdomain || publicname.slug(s.name, 30) : '',
+        hint: main && !s.tunnel.subdomain,
+        prefer: byName ? 'vhost' : '',
+        remotePort: p.remotePort,
+      });
     }
   }
   for (const t of store.state.tunnels) {
-    if (t.enabled !== false) out.push({ id: t.id, proto: t.proto, localPort: +t.localPort, subdomain: t.subdomain || '', remotePort: +t.remotePort || 0 });
+    if (t.enabled !== false) out.push({ id: t.id, proto: t.proto, localPort: +t.localPort, subdomain: t.subdomain || '', hint: false, prefer: '', remotePort: +t.remotePort || 0 });
   }
   return out;
 }
@@ -104,7 +138,7 @@ function syncTunnels() {
   for (const id of [...tunnel.tunnels.keys()]) {
     const w = want.get(id);
     const cur = tunnel.tunnels.get(id);
-    if (!w || w.proto !== cur.proto || w.localPort !== cur.localPort || w.subdomain !== cur.subdomain || w.remotePort !== cur.remotePort) tunnel.remove(id);
+    if (!w || w.proto !== cur.proto || w.localPort !== cur.localPort || w.subdomain !== cur.subdomain || w.remotePort !== cur.remotePort || w.prefer !== cur.prefer) tunnel.remove(id);
   }
   for (const [id, w] of want) if (!tunnel.tunnels.has(id)) tunnel.add(w);
 }
@@ -159,12 +193,17 @@ function tunnelView() {
   const r = store.config.relay;
   return {
     rev: ++tunRev,
-    relay: { enabled: !!r.enabled, host: r.host, port: +r.port || 7000, name: r.name, srvName: r.srvName || '', autoDiscover: r.autoDiscover !== false, hasToken: !!r.token, status: tunnel.status, error: tunnel.error || '', latency: tunnel.latency || 0 },
+    relay: { vhostPort: tunnel.info.vhostPort || 0, domain: tunnel.info.domain || '', names: namesWork(tunnel.info.domain), enabled: !!r.enabled, host: r.host, port: +r.port || 7000, name: r.name, srvName: r.srvName || '', autoDiscover: r.autoDiscover !== false, hasToken: !!r.token, status: tunnel.status, error: tunnel.error || '', latency: tunnel.latency || 0 },
     tunnels: tunnel.list().map((t) => {
       const m = names.get(t.id);
       const e = ext.get(t.id);
+      const domain = tunnel.info.domain;
+      const label = t.subdomain || (m && m.p.idx === 0 ? publicname.slug(m.s.name, 30) : '');
+      // Имя для TCP/UDP-туннеля: метка.домен:порт указывает на релей, а порт выбирает туннель
+      const nameUrl = t.info && t.via !== 'vhost' && t.via !== 'http' && label && namesWork(domain) && m && m.p.idx === 0 ? `${label}.${domain}:${t.info.port}` : '';
       return {
         ...t,
+        nameUrl,
         kind: m ? 'server' : 'port',
         serverId: m ? m.s.id : '',
         name: m ? m.s.name + (m.p.idx ? ' · ' + lab(m.p.label) : '') : e ? e.name : t.id,
@@ -406,7 +445,7 @@ on('POST', '/api/publicname/check', async (c) => {
 // «Стать релеем»: релей Hearth на этом ПК для друзей
 on('GET', '/api/relayhost', async () => relayHost.view());
 on('POST', '/api/relayhost/start', async (c) => {
-  if (c.body && (c.body.portMin || c.body.portMax || c.body.controlPort)) relayHost.setPorts(c.body);
+  if (c.body && (c.body.portMin || c.body.portMax || c.body.controlPort || c.body.vhostPort !== undefined)) relayHost.setPorts(c.body);
   return relayHost.start();
 });
 on('POST', '/api/relayhost/stop', async () => relayHost.stop());
@@ -521,7 +560,14 @@ on('GET', '/api/tunnels', async () => tunnelView());
 on('PUT', '/api/relay', async (c) => {
   const b = c.body;
   const r = store.config.relay;
-  if (typeof b.host === 'string') r.host = b.host.trim();
+  if (typeof b.host === 'string') {
+    if (b.host.trim() !== r.host) {
+      for (const s of store.state.servers) if (s.tunnel) s.tunnel.lastPort = 0; // порты принадлежат прежнему релею
+      store.saveState();
+    }
+    r.host = b.host.trim();
+  }
+  if (typeof b.wildcard === 'boolean') r.wildcard = b.wildcard;
   if (b.port) r.port = +b.port;
   if (typeof b.name === 'string' && b.name.trim()) r.name = b.name.trim();
   if (typeof b.token === 'string' && b.token.trim()) r.token = b.token.trim();
@@ -559,7 +605,7 @@ on('PUT', '/api/relay/auto', async (c) => {
 });
 on('POST', '/api/tunnels', async (c) => {
   const b = c.body;
-  if (!['tcp', 'udp', 'http'].includes(b.proto)) throw Object.assign(new Error('протокол: tcp, udp или http'), { status: 400 });
+  if (!['tcp', 'udp', 'http', 'vhost'].includes(b.proto)) throw Object.assign(new Error('протокол: tcp, udp, http или vhost'), { status: 400 });
   const port = +b.localPort;
   if (!(port > 0 && port < 65536)) throw Object.assign(new Error('неверный локальный порт'), { status: 400 });
   const t = {
@@ -774,7 +820,7 @@ on('PATCH', '/api/tunnels/:id', async (c) => {
     t.localPort = port;
   }
   if (b.proto !== undefined) {
-    if (!['tcp', 'udp', 'http'].includes(b.proto)) throw Object.assign(new Error('протокол: tcp, udp или http'), { status: 400 });
+    if (!['tcp', 'udp', 'http', 'vhost'].includes(b.proto)) throw Object.assign(new Error('протокол: tcp, udp, http или vhost'), { status: 400 });
     t.proto = b.proto;
   }
   if (b.subdomain !== undefined) t.subdomain = String(b.subdomain).toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 40);
