@@ -118,6 +118,47 @@ export async function networkPage() {
           h('button', { class: 'btn sm', 'data-act': 'public-check', on: { click: click(checkPublic) } }, icon('refresh', 14), T('Проверить снова', 'Check again')),
           pubInfo.verdict === 'cgnat' || pubInfo.verdict === 'manual' ? h('button', { class: 'btn sm', on: { click: () => go('tunnels') } }, icon('tunnel', 14), T('Открыть «Туннели»', 'Open “Tunnels”')) : null)));
   }
+  // Имя вместо IP: sslip.io (имя из самого IP, без регистрации) или DuckDNS (своё постоянное имя)
+  const nameBox = h('div', { class: 'public-box', 'data-sect': 'publicname' });
+  function drawName() {
+    const pn = S.publicName;
+    if (!pn) return fill(nameBox, h('p', { class: 'muted' }, T('Загрузка…', 'Loading…')));
+    const duckSub = h('input', { type: 'text', value: pn.duck.sub, placeholder: 'kelly', spellcheck: false, 'data-role': 'duck-sub', 'aria-label': T('Имя на duckdns.org', 'Name on duckdns.org') });
+    const duckTok = h('input', { type: 'password', placeholder: pn.duck.hasToken ? T('сохранён — оставьте пустым, чтобы не менять', 'saved — leave blank to keep') : T('токен с duckdns.org', 'token from duckdns.org'), autocomplete: 'off', 'data-role': 'duck-token', 'aria-label': 'DuckDNS token' });
+    const save = (mode) => click(async () => {
+      const body = { mode };
+      if (mode === 'duckdns' || duckSub.value || duckTok.value) Object.assign(body, { duckSub: duckSub.value, duckToken: duckTok.value || undefined });
+      S.publicName = await api('PUT', '/api/publicname', body);
+      toast(mode === 'off' ? T('Адрес без имени: просто IP', 'No name: plain IP') : T('Имя настроено', 'Name configured'));
+      const fresh = await api('GET', '/api/servers');
+      for (const x of fresh) { const i = S.servers.findIndex((z) => z.id === x.id); if (i >= 0) S.servers[i] = { ...S.servers[i], ...x }; }
+      if (alive()) { drawName(); drawServers(); }
+    });
+    const opt = (mode, title, text) => h('label', { class: 'name-opt' + (pn.mode === mode ? ' on' : '') },
+      h('input', { type: 'radio', name: 'pubname', value: mode, checked: pn.mode === mode, 'data-mode': mode, on: { change: (e) => { if (mode !== 'duckdns') save(mode)(e); else { S.publicName = { ...pn, mode: 'duckdns' }; drawName(); } } } }),
+      h('span', {}, h('b', {}, title), h('small', {}, text)));
+    const st = pn.duck;
+    fill(nameBox,
+      h('p', { class: 'muted' }, T('Друзьям ничего скачивать не нужно: адрес вводится в игре как обычно. Имя удобнее, чем IP. Настоящий домен вроде kelly.mc зарегистрировать нельзя (зона .mc принадлежит Монако), но есть бесплатные способы получить публичное имя для вашего IP:', 'Friends do not need to install anything: they type the address into the game as usual. A name is easier than an IP. A real domain like kelly.mc cannot be registered (.mc belongs to Monaco), but there are free ways to get a public name for your IP:')),
+      opt('off', T('Просто IP', 'Plain IP'), T('203.0.113.7:25565. Ничего настраивать не нужно.', '203.0.113.7:25565. Nothing to set up.')),
+      opt('sslip', T('Имя из IP (sslip.io)', 'Name from the IP (sslip.io)'), T('kelly.203-0-113-7.sslip.io: работает у всех без регистрации и без hosts. Меняется вместе с IP.', 'kelly.203-0-113-7.sslip.io: works for everyone with no sign-up and no hosts edits. Changes with your IP.')),
+      opt('duckdns', T('Своё имя (DuckDNS)', 'Your own name (DuckDNS)'), T('kelly.duckdns.org: постоянное, Hearth сам обновляет IP. Нужен бесплатный аккаунт на duckdns.org.', 'kelly.duckdns.org: permanent, Hearth keeps the IP updated. Needs a free account on duckdns.org.')),
+      pn.mode === 'duckdns' ? h('div', { class: 'duck-form' },
+        h('p', { class: 'muted' }, T('1. Войдите на duckdns.org, создайте имя (например, kelly) и скопируйте токен со страницы. 2. Вставьте их сюда.', '1. Sign in at duckdns.org, create a name (e.g. kelly) and copy the token from the page. 2. Paste them here.')),
+        h('div', { class: 'form' },
+          h('div', { class: 'field' }, h('label', {}, T('Имя (без .duckdns.org)', 'Name (without .duckdns.org)'), duckSub)),
+          h('div', { class: 'field' }, h('label', {}, T('Токен', 'Token'), duckTok))),
+        h('div', { class: 'row-actions' },
+          h('button', { class: 'btn primary', 'data-act': 'duck-save', on: { click: save('duckdns') } }, T('Сохранить и обновить', 'Save and update')),
+          h('button', { class: 'btn ghost', on: { click: click(() => api('POST', '/api/open-url', { url: 'https://www.duckdns.org/' })) } }, icon('link', 14), T('Открыть duckdns.org', 'Open duckdns.org'))),
+        st.ok === true ? h('p', { class: 'tone-ok', 'data-duck': 'ok' }, T(`Имя ${st.host} работает: указывает на ${st.ip}`, `${st.host} works: it points to ${st.ip}`)) : null,
+        st.ok === false ? h('p', { class: 'tone-bad', 'data-duck': 'bad' }, st.error) : null) : null);
+  }
+  ui.redrawPublicName = () => alive() && drawName();
+  const verifyName = async (s) => {
+    const r = await api('POST', '/api/publicname/check', { id: s.id });
+    toast(r.ok ? T(`Имя ${r.host} указывает на ${r.ips.join(', ')}: всё в порядке`, `${r.host} points to ${r.ips.join(', ')}: all good`) : T(`Имя ${r.host} пока не открывается: ${r.error || 'указывает на ' + r.ips.join(', ')}`, `${r.host} does not resolve yet: ${r.error || 'points to ' + r.ips.join(', ')}`), !r.ok);
+  };
   const togglePublic = async (s, enable) => {
     try {
       const r = await api('POST', `/api/servers/${s.id}/public`, { enabled: enable });
@@ -136,7 +177,7 @@ export async function networkPage() {
     const tun = S.tun.tunnels.find((t) => t.serverId === s.id && t.id === 'srv-' + s.id);
     const rows = [];
     if (primary && port) rows.push([T('В одной сети с вами', 'On your network'), `${hostOf(s)}:${port}`, 'lan']);
-    if (s.publicIp && s.publicIp.enabled && port) rows.push([T('Из интернета напрямую', 'Direct from the internet'), `${s.publicIp.ext}:${port}`, 'direct']);
+    if (s.publicIp && s.publicIp.enabled && port) rows.push([T('Из интернета напрямую', 'Direct from the internet'), `${s.publicIp.host || s.publicIp.ext}:${port}`, 'direct']);
     if (tun && tun.info) rows.push([T('Через туннель', 'Through the tunnel'), tun.info.url, 'tunnel']);
     return rows;
   };
@@ -203,7 +244,7 @@ export async function networkPage() {
             h('button', { class: 'btn sm', 'data-act': 'fw-open', title: T('Разрешить входящие подключения к портам сервера', 'Allow inbound connections to the server ports'), on: { click: runElevated(T('Открыть порты в брандмауэре?', 'Open the ports in the firewall?'), T('Windows покажет запрос прав администратора. Hearth добавит правила «Hearth: …» для портов этого сервера.', 'Windows will ask for administrator rights. Hearth adds “Hearth: …” rules for this server’s ports.'), `/api/servers/${s.id}/firewall`, { action: 'open' }, T('Порты открыты в брандмауэре', 'Ports opened in the firewall')) } }, icon('shield', 14), T('Открыть порты', 'Open ports')),
             h('button', { class: 'btn sm ghost', 'data-act': 'fw-close', on: { click: runElevated(T('Закрыть порты?', 'Close the ports?'), T('Правила «Hearth: …» этого сервера будут удалены.', 'This server’s “Hearth: …” rules will be removed.'), `/api/servers/${s.id}/firewall`, { action: 'close' }, T('Правила удалены', 'Rules removed')) } }, T('Закрыть порты', 'Close ports')))),
         nameEditor(s),
-        routes(s).length ? h('div', { class: 'routes', 'data-routes': s.id }, h('small', { class: 'muted' }, T('Как подключаться друзьям (по порядку):', 'How friends connect (in order):')), routes(s).map(([label, addr, kind], i) => h('div', { class: 'route', 'data-route': kind }, h('b', {}, i + 1 + '.'), h('span', {}, label), h('span', { class: 'mono' }, addr), copyBtn(addr)))) : null,
+        routes(s).length ? h('div', { class: 'routes', 'data-routes': s.id }, h('small', { class: 'muted' }, T('Как подключаться друзьям (по порядку):', 'How friends connect (in order):')), routes(s).map(([label, addr, kind], i) => h('div', { class: 'route', 'data-route': kind }, h('b', {}, i + 1 + '.'), h('span', {}, label), h('span', { class: 'mono' }, addr), copyBtn(addr), kind === 'direct' && s.publicIp.host !== s.publicIp.ext ? h('button', { class: 'btn sm ghost', 'data-act': 'name-verify', on: { click: click(() => verifyName(s)) } }, T('Проверить имя', 'Check the name')) : null))) : null,
         s.publicIp && s.publicIp.error ? h('small', { class: 'tone-bad' }, T('Прямой доступ: ', 'Direct access: ') + s.publicIp.error) : null,
         s.netName && primary ? h('div', { class: 'row-actions' },
           h('button', { class: 'btn sm', 'data-act': 'name-hosts', title: `${primary.ip} ${s.netName}`, on: { click: runElevated(T('Включить имя на этом ПК?', 'Enable the name on this PC?'), T(`В hosts будет добавлена строка «${primary.ip} ${s.netName}». Windows спросит права администратора.`, `The line “${primary.ip} ${s.netName}” is added to hosts. Windows asks for administrator rights.`), '/api/network/hosts', { ip: primary.ip, action: 'add', name: s.netName }, T('Имя добавлено в hosts', 'Name added to hosts')) } }, icon('link', 14), T('Включить имя на этом ПК', 'Enable the name on this PC')),
@@ -238,6 +279,8 @@ export async function networkPage() {
       h('div', { class: 'name-tool' }, h('div', { class: 'searchbar grow' }, icon('link', 16), nameIn), decoded),
       h('h2', {}, T('Доступ из интернета', 'Internet access')),
       publicBox,
+      h('h3', {}, T('Имя вместо IP', 'A name instead of an IP')),
+      nameBox,
       h('h2', {}, T('Доступ к серверам', 'Server access')),
       h('label', { class: 'beta-switch' }, h('input', { type: 'checkbox', 'data-role': 'beta-zone', checked: !!(net.beta && net.beta.anyZone), on: { change: async (e) => { net.beta = await api('PUT', '/api/beta', { anyZone: e.currentTarget.checked }); draw(); } } }), h('span', {}, T('Бета для администратора: разрешить свои зоны (soskacraft.mc). Обычным пользователям доступны только имена .', 'Admin beta: allow custom zones (soskacraft.mc). Regular users only get names ending in .') + net.suffix)),
       srvHost,
@@ -247,12 +290,14 @@ export async function networkPage() {
         h('div', { class: 'row-actions' }, h('button', { class: 'btn', on: { click: () => go('tunnels') } }, icon('tunnel', 16), T('Открыть «Туннели»', 'Open “Tunnels”')))));
     drawServers();
     drawPublic();
+    drawName();
   }
 
   fill(page, h('p', { class: 'muted' }, h('span', { class: 'spinner' }), ' ', T('Загрузка…', 'Loading…')));
   try {
     net = await api('GET', '/api/network');
     S.net = net;
+    S.publicName = await api('GET', '/api/publicname');
   } catch (e) {
     return fill(page, h('p', { class: 'muted' }, e.message));
   }

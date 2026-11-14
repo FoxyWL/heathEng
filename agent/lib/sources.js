@@ -45,6 +45,7 @@ const sources = {
 
 const ALLOWED = new Set();
 for (const list of Object.values(sources)) for (const s of list) ALLOWED.add(s.url);
+ALLOWED.add('https://www.duckdns.org/'); // регистрация имени для публичного адреса (раздел «Сеть»)
 
 function forGame(id) {
   return sources[id] || [];

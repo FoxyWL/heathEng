@@ -6,6 +6,7 @@ const store = require('./store');
 const { games, detectJar, portsOf } = require('./catalog');
 const { requiredMajor } = require('./java');
 const gamedefs = require('./gamedefs');
+const publicname = require('./publicname');
 const { rssMb } = require('./sysinfo');
 const { resolveSpawn } = require('./winutil');
 const { Core } = require('./core');
@@ -105,7 +106,7 @@ class Manager {
       tunnel: s.tunnel,
       netName: s.netName || '',
       iconRev: s.iconRev || 0,
-      publicIp: s.publicIp || { enabled: false },
+      publicIp: s.publicIp && s.publicIp.enabled ? { ...s.publicIp, host: publicname.hostFor(s) } : s.publicIp || { enabled: false },
       state: r.state,
       msg: r.msg,
       pct: r.pct,

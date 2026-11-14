@@ -12,6 +12,8 @@ const icons = require('./lib/icons');
 const relaydisc = require('./lib/relaydisc');
 const { NetWatch } = require('./lib/netwatch');
 const { PublicAccess } = require('./lib/publicaccess');
+const { RelayHost } = require('./lib/relayhost');
+const publicname = require('./lib/publicname');
 const files = require('./lib/files');
 const ai = require('./lib/ai');
 const { Manager } = require('./lib/procman');
@@ -25,7 +27,7 @@ const modrinth = require('./lib/modrinth');
 
 const BIND = process.env.BIND || '127.0.0.1';
 const WEB = path.join(__dirname, '..', 'web');
-const VERSION = '1.4.0';
+const VERSION = '1.5.0';
 // Крючки для оболочки (Electron): системные окна и папки вместо запуска внешних программ.
 const hooks = { openExternal: null, openPath: null };
 const GUI = isGuiExe(); // установленная версия без окна консоли
@@ -43,7 +45,16 @@ function emit(type, payload) {
 const mgr = new Manager(emit);
 netaccess.setPreferenceSource(() => (store.config.net || {}).preferred || '');
 const netwatch = new NetWatch({ mgr, emit, store });
-const pub = new PublicAccess({ mgr, store, emit });
+let duckTick = async () => {};
+const pub = new PublicAccess({
+  mgr,
+  store,
+  emit: (type, payload) => {
+    emit(type, payload);
+    if (type === 'net' && payload.type === 'public-ip-changed') duckTick().catch(() => {}); // DuckDNS узнаёт о новом IP сразу
+  },
+});
+const relayHost = new RelayHost({ store, emit });
 const sched = new Scheduler(mgr, emit);
 const tunnel = new TunnelClient();
 const lab = (o) => (o && typeof o === 'object' ? o.ru || o.en : o || '');
@@ -372,6 +383,35 @@ on('DELETE', '/api/servers/:id/icon', async (c) => {
   return mgr.update(s.id, {});
 });
 on('GET', '/api/icons/search', async (c) => icons.searchSteam(c.query.get('term')));
+
+// Публичное имя вместо IP (sslip.io без регистрации или DuckDNS со своим именем)
+const publicIpOfServers = () => ((store.state.servers.find((s) => s.publicIp && s.publicIp.enabled) || {}).publicIp || {}).ext || '';
+const refreshServers = () => store.state.servers.forEach((s) => emit('state', mgr.view(s)));
+on('GET', '/api/publicname', async () => publicname.view());
+on('PUT', '/api/publicname', async (c) => {
+  publicname.set(c.body || {});
+  const cfg = store.config.publicName;
+  if (cfg.mode === 'duckdns' && cfg.duckSub && cfg.duckToken) await publicname.updateDuck(publicIpOfServers());
+  refreshServers();
+  emit('publicname', publicname.view());
+  return publicname.view();
+});
+on('POST', '/api/publicname/check', async (c) => {
+  const s = mgr.rec(c.body && c.body.id);
+  const host = publicname.hostFor(s);
+  if (!host) throw Object.assign(new Error('сначала откройте порты сервера из интернета'), { status: 409 });
+  return publicname.verify(host, s.publicIp.ext);
+});
+
+// «Стать релеем»: релей Hearth на этом ПК для друзей
+on('GET', '/api/relayhost', async () => relayHost.view());
+on('POST', '/api/relayhost/start', async (c) => {
+  if (c.body && (c.body.portMin || c.body.portMax || c.body.controlPort)) relayHost.setPorts(c.body);
+  return relayHost.start();
+});
+on('POST', '/api/relayhost/stop', async () => relayHost.stop());
+on('POST', '/api/relayhost/token', async () => relayHost.newToken());
+on('PUT', '/api/relayhost', async (c) => relayHost.setPorts(c.body || {}));
 
 // Доступ из интернета напрямую (UPnP): проверка и открытие портов сервера одной кнопкой
 on('GET', '/api/public', async () => pub.check());
@@ -887,9 +927,11 @@ function shutdown() {
   tunnel.stop();
   mgr.shutdown();
   store.flush();
+  let relayDone = false;
+  relayHost.stop({ permanent: false }).finally(() => (relayDone = true)); // порты на роутере закрываем до выхода
   const t0 = Date.now();
   const iv = setInterval(() => {
-    const alive = [...mgr.rt.values()].some((r) => r.child);
+    const alive = [...mgr.rt.values()].some((r) => r.child) || !relayDone;
     if (!alive || Date.now() - t0 > 20000) {
       clearInterval(iv);
       process.exit(0);
@@ -1019,6 +1061,9 @@ async function start() {
   sched.start();
   netwatch.start();
   pub.start();
+  duckTick = publicname.start({ ipSource: publicIpOfServers, emit });
+  duckTick().catch(() => {});
+  relayHost.autostart();
   restartRelay();
   relayAuto();
   if (process.env.AUTOSTART !== '0') {

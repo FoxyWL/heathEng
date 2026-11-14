@@ -1,6 +1,6 @@
 {
   "name": "hearth",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "Self-hosted game server manager with a built-in public tunnel (TCP/UDP/HTTP)",
   "license": "MIT",
   "private": true,
@@ -15,7 +15,7 @@
     "build": "node scripts/build.js",
     "build:core": "cargo build --release --manifest-path core/Cargo.toml",
     "imports": "node scripts/web-imports.js",
-    "test": "node test/core.test.js && node test/tunnel.test.js && node test/downloads.test.js && node test/capacity.test.js && node test/network.test.js && node test/lan.test.js && node test/icons.test.js && node test/relay-discovery.test.js && node test/public.test.js && node test/agent.test.js && node test/features.test.js && node test/buttons.test.js && node test/ui-features.test.js && node test/app.test.js && node test/desktop.test.js"
+    "test": "node test/core.test.js && node test/tunnel.test.js && node test/downloads.test.js && node test/capacity.test.js && node test/network.test.js && node test/lan.test.js && node test/icons.test.js && node test/relay-discovery.test.js && node test/public.test.js && node test/publicname.test.js && node test/relayhost.test.js && node test/relay-install.test.js && node test/agent.test.js && node test/features.test.js && node test/buttons.test.js && node test/ui-features.test.js && node test/app.test.js && node test/desktop.test.js"
   },
   "devDependencies": {
     "resedit": "^3.1.0",
