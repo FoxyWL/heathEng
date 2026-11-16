@@ -80,11 +80,35 @@ fs.renameSync(path.join(out, 'electron.exe'), exePath);
   fs.writeFileSync(exePath, Buffer.from(exe.generate()));
 }
 fs.copyFileSync(path.join(root, 'README.md'), path.join(out, 'README.txt'));
+
+// --- подпись кода (необязательно): HEARTH_SIGN_PFX=путь к .pfx, HEARTH_SIGN_PASS=пароль, HEARTH_SIGN_TS=сервер времени ---
+// Подписанный установщик не пугает SmartScreen. Без сертификата сборка идёт как обычно, без подписи.
+function sign(file) {
+  const pfx = process.env.HEARTH_SIGN_PFX;
+  if (!pfx) return false;
+  const ts = process.env.HEARTH_SIGN_TS || 'http://timestamp.digicert.com';
+  const pass = process.env.HEARTH_SIGN_PASS || '';
+  if (process.platform === 'win32') run('signtool', ['sign', '/f', pfx, ...(pass ? ['/p', pass] : []), '/fd', 'sha256', '/tr', ts, '/td', 'sha256', '/d', 'Hearth', file]);
+  else {
+    const tmp = file + '.signed';
+    run('osslsigncode', ['sign', '-pkcs12', pfx, ...(pass ? ['-pass', pass] : []), '-h', 'sha256', '-ts', ts, '-n', 'Hearth', '-in', file, '-out', tmp]);
+    fs.renameSync(tmp, file);
+  }
+  console.log('Подписано: ' + path.relative(root, file));
+  return true;
+}
+const signed = sign(exePath);
 console.log(`\nПриложение собрано: ${path.relative(root, out)}`);
 
 const mk = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['makensis'], { encoding: 'utf8' });
 if (mk.status === 0) {
-  run('makensis', ['-V2', `-DVER=${pkg.version}`, `-DSRC=${out}`, `-DOUT=${path.join(root, 'dist', `Hearth-Setup-${pkg.version}.exe`)}`, 'installer/hearth.nsi']);
+  const setup = path.join(root, 'dist', `Hearth-Setup-${pkg.version}.exe`);
+  run('makensis', ['-V2', `-DVER=${pkg.version}`, `-DSRC=${out}`, `-DOUT=${setup}`, 'installer/hearth.nsi']);
+  const signedSetup = sign(setup);
+  // контрольная сумма рядом с установщиком: по ней обновление в Hearth проверяет скачанный файл
+  const sum = require('crypto').createHash('sha256').update(fs.readFileSync(setup)).digest('hex');
+  fs.writeFileSync(`${setup}.sha256`, `${sum}  ${path.basename(setup)}\n`);
+  console.log(`SHA-256: ${sum}${signed || signedSetup ? ' (подписан)' : ' (без подписи: задайте HEARTH_SIGN_PFX)'}`);
 } else {
   console.log('\nmakensis не найден: установщик не собран (приложение лежит в dist/win-unpacked).');
 }

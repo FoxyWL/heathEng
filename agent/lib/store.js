@@ -63,6 +63,8 @@ config.relayHost = { enabled: false, token: '', controlPort: 7000, portMin: 2700
 config.publicName = { mode: 'off', duckSub: '', duckToken: '', ...(config.publicName || {}) }; // имя вместо IP: sslip.io или DuckDNS
 config.beta = { anyZone: true, ...(config.beta || {}) }; // бета для администратора (пока им считается владелец этого ПК): свои зоны вроде .mc
 config.net = { lastIp: '', preferred: '', ...(config.net || {}) };
+config.panel = { lan: false, ...(config.panel || {}) }; // доступ к панели по сети (для пользователей с ролями): нужен перезапуск
+config.users = Array.isArray(config.users) ? config.users : [];
 config.ai = config.ai || { enabled: false, apiKey: '', model: 'claude-sonnet-5-5' };
 
 const state = readJson(paths.state, { servers: [], tasks: [], tunnels: [] });

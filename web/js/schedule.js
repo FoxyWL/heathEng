@@ -24,6 +24,16 @@ export async function scheduleTab() {
       backups = await api('GET', `/api/servers/${id}/backups`);
       S.tasks = await api('GET', '/api/tasks');
     } catch {}
+    let cloudOn = false;
+    let remote = [];
+    let cloudErr = '';
+    try {
+      cloudOn = (await api('GET', '/api/cloud')).enabled;
+      if (cloudOn) remote = await api('GET', `/api/servers/${id}/cloud-backups`);
+    } catch (e) {
+      cloudErr = e.message;
+    }
+    const inCloud = new Set(remote.map((r) => r.name));
     const mine = S.tasks.filter((t) => t.serverId === id);
     const name = h('input', { type: 'text', placeholder: T('Ночной бэкап', 'Nightly backup') });
     const act = h('select', {}, Object.entries(ACTIONS()).map(([k, v]) => h('option', { value: k }, v)));
@@ -62,6 +72,7 @@ export async function scheduleTab() {
           h('td', { class: 'mono' }, b.name), h('td', {}, fmtSize(b.size)), h('td', {}, dt(b.mtime)),
           h('td', { class: 'r' },
             h('button', { class: 'btn sm', on: { click: click(() => downloadBlob(`/api/servers/${id}/backups/${encodeURIComponent(b.name)}`, b.name)) } }, T('Скачать', 'Download')), ' ',
+            cloudOn ? h('button', { class: 'btn sm', 'data-act': 'cloud-up', disabled: inCloud.has(b.name), title: T('Отправить копию в облако', 'Send a copy to the cloud'), on: { click: click(async () => { try { await api('POST', `/api/servers/${id}/cloud-backups`, { name: b.name }); toast(T('Загружено в облако', 'Uploaded to the cloud')); } catch (e) { toast(e.message, true); } await draw(); }) } }, inCloud.has(b.name) ? T('В облаке', 'In cloud') : T('В облако', 'To cloud')) : null, ' ',
             h('button', { class: 'btn sm', title: T('Вернуть файлы сервера к этому бэкапу', 'Roll the server files back to this backup'), on: { click: guard(async () => {
               const ok = await askConfirm({ title: T('Восстановить из бэкапа?', 'Restore from backup?'), text: T('Файлы сервера будут перезаписаны содержимым бэкапа. Сервер должен быть остановлен.', 'Server files will be overwritten with the backup contents. The server must be stopped.'), ok: T('Восстановить', 'Restore'), danger: true });
               if (ok) {
@@ -94,6 +105,20 @@ export async function scheduleTab() {
         h('div', { class: 'head' }, h('h3', {}, T('Бэкапы', 'Backups')),
           h('button', { class: 'btn', on: { click: click(async () => { await api('POST', `/api/servers/${id}/backups`, {}); toast(T('Бэкап создан', 'Backup created')); await draw(); }) } }, T('Сделать бэкап сейчас', 'Back up now'))),
         bk),
+      cloudOn || cloudErr ? h('div', { class: 'sect', 'data-sect': 'cloud-backups' },
+        h('div', { class: 'head' }, h('h3', {}, T('Облако', 'Cloud'))),
+        cloudErr ? h('p', { class: 'tone-bad' }, cloudErr) : remote.length
+          ? h('table', { class: 't' }, h('thead', {}, h('tr', {}, [T('Файл', 'File'), T('Размер', 'Size'), T('Создан', 'Created'), ''].map((x) => h('th', {}, x)))),
+            h('tbody', {}, remote.map((r) => h('tr', {}, h('td', { class: 'mono' }, r.name), h('td', {}, fmtSize(r.size)), h('td', {}, dt(r.mtime)),
+              h('td', { class: 'r' },
+                r.local ? h('span', { class: 'muted' }, T('есть на ПК', 'on this PC')) : h('button', { class: 'btn sm', 'data-act': 'cloud-pull', title: T('Скачать на этот ПК, потом восстановить кнопкой «Восстановить»', 'Download to this PC, then use “Restore”'), on: { click: click(async () => { try { await api('POST', `/api/servers/${id}/cloud-backups/${encodeURIComponent(r.name)}/pull`); toast(T('Скачано: можно восстанавливать', 'Downloaded: you can restore now')); } catch (e) { toast(e.message, true); } await draw(); }) } }, T('Вернуть на ПК', 'Bring back')), ' ',
+                h('button', { class: 'btn sm ghost danger', title: T('Удалить из облака', 'Delete from the cloud'), on: { click: guard(async () => {
+                  if (await askConfirm({ title: T('Удалить из облака?', 'Delete from the cloud?'), text: r.name, ok: T('Удалить', 'Delete'), danger: true })) {
+                    await api('DELETE', `/api/servers/${id}/cloud-backups/${encodeURIComponent(r.name)}`);
+                    await draw();
+                  }
+                }) } }, '✕'))))))
+          : h('p', { class: 'muted' }, T('В облаке бэкапов этого сервера пока нет. Новые будут загружаться сами.', 'No backups of this server in the cloud yet. New ones upload automatically.'))) : null,
     );
   };
   await draw();

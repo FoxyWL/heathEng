@@ -143,6 +143,7 @@ class TunnelClient extends EventEmitter {
       proto: this._via(t),
       subdomain: t.subdomain,
       hint: !!t.hint, // имя только пожелание: если занято, релей выдаст другое
+      hosts: t.hosts && t.hosts.length ? t.hosts : undefined, // свои имена хозяина (play.example.com), которые тоже ведут на этот туннель
       remotePort: t.remotePort,
     });
   }
@@ -162,6 +163,7 @@ class TunnelClient extends EventEmitter {
       remotePort: spec.remotePort || 0,
       prefer: spec.prefer || '',
       hint: !!spec.hint,
+      hosts: spec.hosts || [],
       info: null,
       error: '',
       stats: { rx: 0, tx: 0, conns: 0, total: 0, since: 0 },

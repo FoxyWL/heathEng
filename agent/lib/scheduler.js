@@ -90,6 +90,7 @@ function tarCreate(file, srcDir) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const hooks = { afterBackup: null };
 
 async function doBackup(mgr, server, keep) {
   const r = mgr._rt(server.id);
@@ -111,6 +112,7 @@ async function doBackup(mgr, server, keep) {
   const all = listBackups(server.id);
   const limit = Math.max(1, +keep || 7);
   for (const b of all.slice(limit)) fs.rmSync(path.join(backupDir(server.id), b.name), { force: true });
+  if (hooks.afterBackup) hooks.afterBackup(server, name);
   return name;
 }
 
@@ -222,4 +224,4 @@ class Scheduler {
   }
 }
 
-module.exports = { Scheduler, listBackups, backupDir, doBackup };
+module.exports = { Scheduler, listBackups, backupDir, doBackup, hooks };

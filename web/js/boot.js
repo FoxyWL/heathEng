@@ -97,6 +97,10 @@ hooks.relay = (f) => {
 hooks.relayhost = () => {
   if (S.view === 'tunnels' && ui.redrawRelayHost) ui.redrawRelayHost();
 };
+hooks.update = (fresh) => {
+  if (fresh) toast(T(`Вышла версия ${fresh}. Установить можно в «Настройки» → «Обновления»`, `Version ${fresh} is out. Install it in Settings → Updates`));
+  if (S.view === 'settings' && ui.redrawUpdate) ui.redrawUpdate();
+};
 hooks.publicname = () => {
   if (S.view === 'network' && ui.redrawPublicName) ui.redrawPublicName();
 };

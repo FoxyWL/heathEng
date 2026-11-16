@@ -113,6 +113,11 @@ export function connectEvents() {
     S.relayHost = v;
     hooks.relayhost();
   });
+  on('update', (v) => {
+    const fresh = v.available && !(S.update && S.update.available && S.update.available.version === v.available.version);
+    S.update = v;
+    hooks.update(fresh && !v.available.skipped ? v.available.version : '');
+  });
   on('publicname', (v) => {
     S.publicName = v;
     hooks.publicname();

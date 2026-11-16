@@ -14,10 +14,14 @@ const { NetWatch } = require('./lib/netwatch');
 const { PublicAccess } = require('./lib/publicaccess');
 const { RelayHost } = require('./lib/relayhost');
 const publicname = require('./lib/publicname');
+const { Updater } = require('./lib/updater');
+const { Notifier } = require('./lib/notify');
+const { Access } = require('./lib/access');
 const files = require('./lib/files');
 const ai = require('./lib/ai');
 const { Manager } = require('./lib/procman');
-const { Scheduler, listBackups, backupDir, doBackup } = require('./lib/scheduler');
+const { Scheduler, listBackups, backupDir, doBackup, hooks: backupHooks } = require('./lib/scheduler');
+const { Cloud } = require('./lib/cloud');
 const { TunnelClient } = require('./lib/tunnel');
 const { systemJava } = require('./lib/java');
 const { openAppWindow } = require('./lib/appwindow');
@@ -25,9 +29,9 @@ const { tarBin, isGuiExe, messageBox } = require('./lib/winutil');
 const applog = require('./lib/applog');
 const modrinth = require('./lib/modrinth');
 
-const BIND = process.env.BIND || '127.0.0.1';
+const BIND = process.env.BIND || (store.config.panel && store.config.panel.lan ? '0.0.0.0' : '127.0.0.1');
 const WEB = path.join(__dirname, '..', 'web');
-const VERSION = '1.6.0';
+const VERSION = '1.7.0';
 // Крючки для оболочки (Electron): системные окна и папки вместо запуска внешних программ.
 const hooks = { openExternal: null, openPath: null };
 const GUI = isGuiExe(); // установленная версия без окна консоли
@@ -38,10 +42,18 @@ const sse = new Set();
 let quitTimer = null;
 let bgAsked = false;
 function emit(type, payload) {
-  const data = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`;
-  for (const res of sse) res.write(data);
+  let data = null;
+  for (const res of sse) {
+    const p = res.principal;
+    if (p && !p.admin) {
+      // пользователям с ограниченной ролью уходит только то, что относится к их серверам
+      const pl = access.event(p, type, payload);
+      if (pl !== null) res.write(`event: ${type}\ndata: ${JSON.stringify(pl)}\n\n`);
+    } else res.write(data || (data = `event: ${type}\ndata: ${JSON.stringify(payload)}\n\n`));
+  }
 }
 
+const access = new Access(store);
 const mgr = new Manager(emit);
 netaccess.setPreferenceSource(() => (store.config.net || {}).preferred || '');
 const netwatch = new NetWatch({ mgr, emit, store });
@@ -51,10 +63,25 @@ const pub = new PublicAccess({
   store,
   emit: (type, payload) => {
     emit(type, payload);
-    if (type === 'net' && payload.type === 'public-ip-changed') duckTick().catch(() => {}); // DuckDNS узнаёт о новом IP сразу
+    if (type === 'net' && payload.type === 'public-ip-changed') {
+      duckTick().catch(() => {}); // DuckDNS узнаёт о новом IP сразу
+      notifier.onNet(payload);
+    }
   },
 });
 const relayHost = new RelayHost({ store, emit });
+const notifier = new Notifier({ store, dataDir: store.paths.data });
+const cloud = new Cloud({
+  store,
+  backupDir,
+  listLocal: listBackups,
+  onResult: (r, id) => {
+    emit('cloud', cloud.view());
+    if (!r.ok) notifier.notify('backup', 'Облачный бэкап не загрузился', `${r.name}: ${r.error}`, { serverId: id }, { key: 'cloud' }).catch(() => {});
+  },
+});
+backupHooks.afterBackup = (server, name) => cloud.afterBackup(server, name);
+const updater = new Updater({ store, emit: (t, p) => { emit(t, p); if (t === 'update') notifier.onUpdate(p); }, version: VERSION, quit: () => shutdown() });
 const sched = new Scheduler(mgr, emit);
 const tunnel = new TunnelClient();
 const lab = (o) => (o && typeof o === 'object' ? o.ru || o.en : o || '');
@@ -75,6 +102,7 @@ function rememberPorts() {
 }
 tunnel.on('update', () => {
   rememberPorts();
+  notifier.onRelay(tunnel.status, !!store.config.relay.enabled);
   emit('tunnels', tunnelView());
 });
 tunnel.on('latency', () => emit('tunnels', tunnelView()));
@@ -123,12 +151,13 @@ function desiredTunnels() {
         subdomain: main ? s.tunnel.subdomain || publicname.slug(s.name, 30) : '',
         hint: main && !s.tunnel.subdomain,
         prefer: byName ? 'vhost' : '',
+        hosts: byName && s.tunnel.customHost ? [s.tunnel.customHost] : [],
         remotePort: p.remotePort,
       });
     }
   }
   for (const t of store.state.tunnels) {
-    if (t.enabled !== false) out.push({ id: t.id, proto: t.proto, localPort: +t.localPort, subdomain: t.subdomain || '', hint: false, prefer: '', remotePort: +t.remotePort || 0 });
+    if (t.enabled !== false) out.push({ id: t.id, proto: t.proto, localPort: +t.localPort, subdomain: t.subdomain || '', hint: false, prefer: '', hosts: [], remotePort: +t.remotePort || 0 });
   }
   return out;
 }
@@ -138,7 +167,7 @@ function syncTunnels() {
   for (const id of [...tunnel.tunnels.keys()]) {
     const w = want.get(id);
     const cur = tunnel.tunnels.get(id);
-    if (!w || w.proto !== cur.proto || w.localPort !== cur.localPort || w.subdomain !== cur.subdomain || w.remotePort !== cur.remotePort || w.prefer !== cur.prefer) tunnel.remove(id);
+    if (!w || w.proto !== cur.proto || w.localPort !== cur.localPort || w.subdomain !== cur.subdomain || w.remotePort !== cur.remotePort || w.prefer !== cur.prefer || (w.hosts || []).join() !== (cur.hosts || []).join()) tunnel.remove(id);
   }
   for (const [id, w] of want) if (!tunnel.tunnels.has(id)) tunnel.add(w);
 }
@@ -193,7 +222,7 @@ function tunnelView() {
   const r = store.config.relay;
   return {
     rev: ++tunRev,
-    relay: { vhostPort: tunnel.info.vhostPort || 0, domain: tunnel.info.domain || '', names: namesWork(tunnel.info.domain), enabled: !!r.enabled, host: r.host, port: +r.port || 7000, name: r.name, srvName: r.srvName || '', autoDiscover: r.autoDiscover !== false, hasToken: !!r.token, status: tunnel.status, error: tunnel.error || '', latency: tunnel.latency || 0 },
+    relay: { wildcard: r.wildcard === true, vhostPort: tunnel.info.vhostPort || 0, domain: tunnel.info.domain || '', names: namesWork(tunnel.info.domain), enabled: !!r.enabled, host: r.host, port: +r.port || 7000, name: r.name, srvName: r.srvName || '', autoDiscover: r.autoDiscover !== false, hasToken: !!r.token, status: tunnel.status, error: tunnel.error || '', latency: tunnel.latency || 0 },
     tunnels: tunnel.list().map((t) => {
       const m = names.get(t.id);
       const e = ext.get(t.id);
@@ -221,6 +250,7 @@ function tunnelView() {
 
 mgr.emit = (type, payload) => {
   emit(type, payload);
+  if (type === 'state') notifier.onServer(payload);
   if (type === 'state' || type === 'removed') setImmediate(syncTunnels);
 };
 
@@ -268,6 +298,7 @@ on('GET', '/api/system', async () => ({
   core: { ok: mgr.core.ok, cores: mgr.core.sys ? mgr.core.sys.cores : 0 },
   ai: { enabled: store.config.ai.enabled, hasKey: !!store.config.ai.apiKey, model: store.config.ai.model },
 }));
+require('./routes/admin')({ on, store, mgr, tunnel, notifier, cloud, access, updater, sse, bind: BIND, port: () => PORT });
 on('GET', '/api/startup', async () => startup.status());
 on('PUT', '/api/startup', async (c) => startup.set(!!(c.body && c.body.enabled)));
 on('PUT', '/api/settings', async (c) => {
@@ -293,67 +324,6 @@ on('POST', '/api/capacity/auto', async () => {
   return mgr.cap.view();
 });
 
-on('GET', '/api/network', async () => {
-  const addresses = netaccess.addresses();
-  const primary = addresses.find((a) => a.primary);
-  const entries = netaccess.readHosts();
-  const hosts = {};
-  if (primary) {
-    hosts[primary.fqdn] = netaccess.hostsState(primary.fqdn, primary.ip, entries);
-    for (const s of store.state.servers) if (s.netName) hosts[s.netName] = netaccess.hostsState(s.netName, primary.ip, entries);
-  }
-  return { preferred: (store.config.net || {}).preferred || '', hostname: require('os').hostname(), suffix: netname.SUFFIX, addresses, windows: process.platform === 'win32', beta: store.config.beta, hosts, lastIp: (store.config.net || {}).lastIp || '' };
-});
-// Закрепить адрес основным (например, проводной вместо Wi-Fi) или вернуть автовыбор
-on('PUT', '/api/network/preferred', async (c) => {
-  const ip = String((c.body && c.body.ip) || '').trim();
-  if (ip && !netaccess.addresses('').some((a) => a.ip === ip)) throw Object.assign(new Error('такого адреса у этого ПК нет'), { status: 400 });
-  store.config.net.preferred = ip;
-  store.saveConfig();
-  netwatch.checkIp();
-  return { preferred: ip };
-});
-on('GET', '/api/network/resolve', async (c) => {
-  try {
-    const ip = netname.nameToIp(c.query.get('name') || '');
-    return { ip, fqdn: netname.fqdn(ip) };
-  } catch (e) {
-    throw Object.assign(new Error(e.message), { status: 400 });
-  }
-});
-on('GET', '/api/servers/:id/reach', async (c) => {
-  const s = mgr.rec(c.params.id);
-  const state = mgr.view(s).state;
-  const r = await netaccess.reach(catalog.portsOf(s.game, s.settings), ['running', 'starting'].includes(state));
-  const fw = await netaccess.firewallState(netaccess.firewallRules(s.name, catalog.portsOf(s.game, s.settings)));
-  return { state, ...r, firewall: fw };
-});
-on('POST', '/api/servers/:id/firewall', async (c) => {
-  const s = mgr.rec(c.params.id);
-  const action = c.body && c.body.action === 'close' ? 'close' : 'open';
-  const rules = netaccess.firewallRules(s.name, catalog.portsOf(s.game, s.settings));
-  if (!rules.length) throw Object.assign(new Error('у сервера нет портов TCP или UDP'), { status: 400 });
-  if (process.platform !== 'win32') {
-    return { executed: false, rules: rules.map((r) => r.name), commands: rules.map((r) => `ufw ${action === 'open' ? 'allow' : 'delete allow'} ${r.port}/${r.proto.toLowerCase()}`) };
-  }
-  const res = await netaccess.elevated(rules.map(action === 'open' ? netaccess.netshAdd : netaccess.netshDel));
-  return { ...res, rules: rules.map((r) => r.name) };
-});
-on('POST', '/api/network/hosts', async (c) => {
-  const ip = String((c.body && c.body.ip) || '').trim();
-  if (!netname.parseIp(ip) || ip === '0.0.0.0' || ip.startsWith('127.')) throw Object.assign(new Error('нужен IPv4-адрес сервера в сети'), { status: 400 });
-  const action = c.body.action === 'remove' ? 'remove' : 'add';
-  let name = netname.fqdn(ip);
-  if (c.body.name) {
-    name = badRequest(() => netname.parseCustom(c.body.name, { anyZone: store.config.beta.anyZone })).host;
-  }
-  const line = netaccess.hostsLine(ip, name);
-  if (process.platform !== 'win32') return { executed: false, commands: [`${action === 'add' ? 'echo' : 'remove:'} ${line} (${netaccess.hostsPath()})`], line, fqdn: name };
-  const res = await netaccess.elevated(netaccess.hostsCommands(ip, action, name));
-  return { ...res, line, fqdn: name };
-});
-
-// Своё имя сервера. Всем: <имя>.hearth[:порт]. Бета (администратор): любая зона, например soskacraft.mc:25570. Пустое имя возвращает автоимя.
 const badRequest = (fn) => {
   try {
     return fn();
@@ -361,105 +331,12 @@ const badRequest = (fn) => {
     throw Object.assign(new Error(e.message), { status: 400 });
   }
 };
-on('GET', '/api/beta', async () => store.config.beta);
-on('PUT', '/api/beta', async (c) => {
-  if (c.body && typeof c.body.anyZone === 'boolean') store.config.beta.anyZone = c.body.anyZone;
-  store.saveConfig();
-  return store.config.beta;
-});
-on('PUT', '/api/servers/:id/netname', async (c) => {
-  const s = mgr.rec(c.params.id);
-  const raw = String((c.body && c.body.name) || '').trim();
-  if (!raw) {
-    delete s.netName;
-    store.saveState();
-    return mgr.update(s.id, {});
-  }
-  const { host, port } = badRequest(() => netname.parseCustom(raw, { anyZone: store.config.beta.anyZone }));
-  if (mgr.list().some((o) => o.id !== s.id && o.netName === host)) throw Object.assign(new Error(`имя ${host} уже занято другим сервером`), { status: 409 });
-  let restart = false;
-  if (port !== null) {
-    const f = catalog.games[s.game].fields.find((x) => x.key === 'port');
-    if (!f) throw Object.assign(new Error('у этой игры порт меняется в разделе «Запуск»: укажите имя без порта'), { status: 400 });
-    if (port < (f.min || 1) || port > (f.max || 65535)) throw Object.assign(new Error(`порт для этой игры: ${f.min || 1}–${f.max || 65535}`), { status: 400 });
-    const busy = mgr.list().find((o) => o.id !== s.id && catalog.portsOf(o.game, o.settings).some((p) => p.port === port && p.proto === 'tcp'));
-    if (busy) throw Object.assign(new Error(`порт ${port} уже занят сервером «${busy.name}»`), { status: 409 });
-    if (+s.settings.port !== port) {
-      mgr.update(s.id, { settings: { port } });
-      restart = ['running', 'starting'].includes(mgr.view(s).state);
-    }
-  }
-  s.netName = host;
-  store.saveState();
-  return { ...mgr.update(s.id, {}), host, port, restartRequired: restart };
-});
-
-// Значки игр: отдают картинку или 404 (тогда панель рисует свою плитку)
 const sendIcon = (res, ic) => {
   res.writeHead(200, { 'content-type': ic.mime, 'cache-control': 'private, max-age=86400' });
   fs.createReadStream(ic.file).pipe(res);
 };
-on('GET', '/api/games/:game/icon', async (c) => ({ __icon: await icons.forGame(c.params.game) }));
-on('GET', '/api/servers/:id/icon', async (c) => ({ __icon: await icons.forServer(mgr.rec(c.params.id)) }));
-on('PUT', '/api/servers/:id/icon', async (c) => {
-  const s = mgr.rec(c.params.id);
-  const b = c.body || {};
-  if (b.steamApp !== undefined) await icons.setFromSteam(s.id, +b.steamApp);
-  else {
-    const m = /^data:image\/[a-z+.-]+;base64,(.+)$/i.exec(String(b.dataUrl || ''));
-    if (!m) throw Object.assign(new Error('нужна картинка (dataUrl) или номер игры в Steam'), { status: 400 });
-    icons.setCustom(s.id, Buffer.from(m[1], 'base64'));
-  }
-  s.iconRev = (s.iconRev || 0) + 1;
-  store.saveState();
-  return mgr.update(s.id, {});
-});
-on('DELETE', '/api/servers/:id/icon', async (c) => {
-  const s = mgr.rec(c.params.id);
-  icons.clearCustom(s.id);
-  s.iconRev = (s.iconRev || 0) + 1;
-  store.saveState();
-  return mgr.update(s.id, {});
-});
-on('GET', '/api/icons/search', async (c) => icons.searchSteam(c.query.get('term')));
-
-// Публичное имя вместо IP (sslip.io без регистрации или DuckDNS со своим именем)
 const publicIpOfServers = () => ((store.state.servers.find((s) => s.publicIp && s.publicIp.enabled) || {}).publicIp || {}).ext || '';
-const refreshServers = () => store.state.servers.forEach((s) => emit('state', mgr.view(s)));
-on('GET', '/api/publicname', async () => publicname.view());
-on('PUT', '/api/publicname', async (c) => {
-  publicname.set(c.body || {});
-  const cfg = store.config.publicName;
-  if (cfg.mode === 'duckdns' && cfg.duckSub && cfg.duckToken) await publicname.updateDuck(publicIpOfServers());
-  refreshServers();
-  emit('publicname', publicname.view());
-  return publicname.view();
-});
-on('POST', '/api/publicname/check', async (c) => {
-  const s = mgr.rec(c.body && c.body.id);
-  const host = publicname.hostFor(s);
-  if (!host) throw Object.assign(new Error('сначала откройте порты сервера из интернета'), { status: 409 });
-  return publicname.verify(host, s.publicIp.ext);
-});
-
-// «Стать релеем»: релей Hearth на этом ПК для друзей
-on('GET', '/api/relayhost', async () => relayHost.view());
-on('POST', '/api/relayhost/start', async (c) => {
-  if (c.body && (c.body.portMin || c.body.portMax || c.body.controlPort || c.body.vhostPort !== undefined)) relayHost.setPorts(c.body);
-  return relayHost.start();
-});
-on('POST', '/api/relayhost/stop', async () => relayHost.stop());
-on('POST', '/api/relayhost/token', async () => relayHost.newToken());
-on('PUT', '/api/relayhost', async (c) => relayHost.setPorts(c.body || {}));
-
-// Доступ из интернета напрямую (UPnP): проверка и открытие портов сервера одной кнопкой
-on('GET', '/api/public', async () => pub.check());
-on('POST', '/api/servers/:id/public', async (c) => {
-  const s = mgr.rec(c.params.id);
-  if (c.body && c.body.enabled === false) await pub.close(s);
-  else await pub.open(s);
-  return mgr.update(s.id, {});
-});
+require('./routes/network')({ badRequest, publicIpOfServers, catalog, emit, icons, mgr, netaccess, netname, netwatch, on, pub, publicname, relayHost, store });
 
 on('GET', '/api/catalog', async () => catalog.describe());
 on('GET', '/api/catalog/:game/versions', async (c) => {
@@ -629,171 +506,7 @@ on('DELETE', '/api/tunnels/:id', async (c) => {
   return tunnelView();
 });
 
-// ---------- игроки (Minecraft) ----------
-const NAME_RE = /^[A-Za-z0-9_.\- ]{1,32}$/;
-function readJsonList(dir, name) {
-  try {
-    const v = JSON.parse(fs.readFileSync(path.join(dir, name), 'utf8'));
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-}
-on('GET', '/api/servers/:id/players', async (c) => {
-  const s = mgr.rec(c.params.id);
-  const r = mgr._rt(s.id);
-  const mc = s.game.startsWith('minecraft');
-  if (!mc) return { supported: false, online: [], whitelist: [], ops: [], banned: [], running: !!r.child };
-  return {
-    supported: true,
-    running: !!r.child,
-    online: r.child ? [...r.players] : [],
-    whitelist: readJsonList(s.dir, 'whitelist.json').map((x) => x.name).filter(Boolean),
-    ops: readJsonList(s.dir, 'ops.json').map((x) => ({ name: x.name, level: x.level })).filter((x) => x.name),
-    banned: readJsonList(s.dir, 'banned-players.json').map((x) => ({ name: x.name, reason: x.reason || '' })).filter((x) => x.name),
-  };
-});
-const PLAYER_CMDS = {
-  kick: (n, reason) => `kick ${n}${reason ? ' ' + reason : ''}`,
-  ban: (n, reason) => `ban ${n}${reason ? ' ' + reason : ''}`,
-  pardon: (n) => `pardon ${n}`,
-  op: (n) => `op ${n}`,
-  deop: (n) => `deop ${n}`,
-  'whitelist-add': (n) => `whitelist add ${n}`,
-  'whitelist-remove': (n) => `whitelist remove ${n}`,
-};
-on('POST', '/api/servers/:id/players/:action', async (c) => {
-  const s = mgr.rec(c.params.id);
-  if (!s.game.startsWith('minecraft')) throw Object.assign(new Error('управление игроками есть только у Minecraft'), { status: 400 });
-  const mk = PLAYER_CMDS[c.params.action];
-  if (!mk) throw Object.assign(new Error('неизвестное действие'), { status: 400 });
-  const name = String(c.body.name || '').trim();
-  if (!NAME_RE.test(name)) throw Object.assign(new Error('некорректный ник'), { status: 400 });
-  if (!mgr._rt(s.id).child) throw Object.assign(new Error('сервер не запущен: команды игрокам выполняются на работающем сервере'), { status: 409 });
-  const reason = String(c.body.reason || '').replace(/[\r\n]+/g, ' ').slice(0, 120);
-  mgr.send(s.id, mk(name, reason));
-  return { ok: true };
-});
-
-// ---------- плагины / моды ----------
-function pluginDir(s) {
-  const g = catalog.games[s.game];
-  if (!g || !g.plugins) return '';
-  if (g.pdir) return g.pdir;
-  return { plugins: 'plugins', mods: 'mods', oxide: 'oxide/plugins', addons: 'addons' }[g.plugins] || '';
-}
-const PLUGIN_EXT = /\.(jar|dll|cs|lua|smx|vdf|zip|so)(\.disabled)?$/i;
-on('GET', '/api/servers/:id/plugins', async (c) => {
-  const s = mgr.rec(c.params.id);
-  const rel = pluginDir(s);
-  if (!rel) return { supported: false, dir: '', items: [] };
-  const dir = path.join(s.dir, rel);
-  let items = [];
-  try {
-    items = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((e) => e.isFile() && PLUGIN_EXT.test(e.name))
-      .map((e) => {
-        const st = fs.statSync(path.join(dir, e.name));
-        return { name: e.name, enabled: !e.name.endsWith('.disabled'), size: st.size, mtime: st.mtimeMs };
-      })
-      .sort((a, b) => a.name.localeCompare(b.name));
-  } catch {}
-  return { supported: true, dir: rel, items, kind: catalog.games[s.game].plugins };
-});
-on('POST', '/api/servers/:id/plugins/toggle', async (c) => {
-  const s = mgr.rec(c.params.id);
-  const dir = path.join(s.dir, pluginDir(s) || '__none__');
-  const name = path.basename(String(c.body.name || ''));
-  const from = path.join(dir, name);
-  if (!pluginDir(s) || !fs.existsSync(from)) throw Object.assign(new Error('файл не найден'), { status: 404 });
-  const to = name.endsWith('.disabled') ? path.join(dir, name.slice(0, -9)) : from + '.disabled';
-  fs.renameSync(from, to);
-  if (mgr._rt(s.id).child) mgr.markRestartRequired && mgr.markRestartRequired(s.id);
-  return { ok: true, name: path.basename(to) };
-});
-on('DELETE', '/api/servers/:id/plugins', async (c) => {
-  const s = mgr.rec(c.params.id);
-  if (!pluginDir(s)) throw Object.assign(new Error('у игры нет плагинов'), { status: 400 });
-  const f = path.join(s.dir, pluginDir(s), path.basename(String(c.query.get('name') || '')));
-  fs.rmSync(f, { force: true });
-  return { ok: true };
-});
-on('GET', '/api/servers/:id/plugins/search', async (c) => {
-  const s = mgr.rec(c.params.id);
-  if (!modrinth.supports(s.game)) return { supported: false, hits: [] };
-  const hits = await modrinth.search({ game: s.game, version: s.version, q: c.query.get('q') || '' });
-  return { supported: true, hits };
-});
-on('POST', '/api/servers/:id/plugins/install', async (c) => {
-  const s = mgr.rec(c.params.id);
-  const rel = pluginDir(s);
-  if (!rel || !modrinth.supports(s.game)) throw Object.assign(new Error('у этой игры нет онлайн-каталога плагинов'), { status: 400 });
-  const r = await modrinth.install({ game: s.game, version: s.version, project: String(c.body.project || ''), destDir: path.join(s.dir, rel) });
-  mgr._log(s, 'sys', `Установлен плагин ${r.name} (${r.version}) из Modrinth`);
-  if (mgr._rt(s.id).child) mgr.markRestartRequired(s.id);
-  return { ok: true, ...r };
-});
-on('GET', '/api/servers/:id/plugin-dir', async (c) => ({ dir: pluginDir(mgr.rec(c.params.id)) }));
-
-// ---------- мир ----------
-function dirSize(d, budget = { n: 20000 }) {
-  let total = 0;
-  let ents = [];
-  try {
-    ents = fs.readdirSync(d, { withFileTypes: true });
-  } catch {
-    return 0;
-  }
-  for (const e of ents) {
-    if (budget.n-- <= 0) return total;
-    const p = path.join(d, e.name);
-    try {
-      total += e.isDirectory() ? dirSize(p, budget) : fs.statSync(p).size;
-    } catch {}
-  }
-  return total;
-}
-function worldNames(s) {
-  let level = 'world';
-  try {
-    const m = /^level-name=(.*)$/m.exec(fs.readFileSync(path.join(s.dir, 'server.properties'), 'utf8'));
-    if (m && m[1].trim()) level = m[1].trim();
-  } catch {}
-  return { level, dirs: [level, level + '_nether', level + '_the_end'] };
-}
-on('GET', '/api/servers/:id/world', async (c) => {
-  const s = mgr.rec(c.params.id);
-  if (!s.game.startsWith('minecraft')) return { supported: false };
-  const { level, dirs } = worldNames(s);
-  const parts = dirs.map((d) => {
-    const full = path.join(s.dir, d);
-    const exists = fs.existsSync(full) && fs.statSync(full).isDirectory();
-    return { name: d, exists, size: exists ? dirSize(full) : 0, mtime: exists ? fs.statSync(full).mtimeMs : 0 };
-  });
-  let seed = '';
-  try {
-    const m = /^level-seed=(.*)$/m.exec(fs.readFileSync(path.join(s.dir, 'server.properties'), 'utf8'));
-    seed = m ? m[1] : '';
-  } catch {}
-  return { supported: true, level, parts, seed, running: !!mgr._rt(s.id).child };
-});
-on('POST', '/api/servers/:id/world/reset', async (c) => {
-  const s = mgr.rec(c.params.id);
-  if (!s.game.startsWith('minecraft')) throw Object.assign(new Error('сброс мира есть только у Minecraft'), { status: 400 });
-  if (mgr._rt(s.id).child) throw Object.assign(new Error('остановите сервер перед сбросом мира'), { status: 409 });
-  const { dirs } = worldNames(s);
-  let n = 0;
-  for (const d of dirs) {
-    const full = path.join(s.dir, d);
-    if (full.startsWith(path.resolve(s.dir) + path.sep) && fs.existsSync(full)) {
-      fs.rmSync(full, { recursive: true, force: true });
-      n++;
-    }
-  }
-  mgr._log(s, 'sys', `Мир сброшен (удалено папок: ${n}). При следующем запуске создастся новый.`);
-  return { ok: true, removed: n };
-});
+require('./routes/minecraft')({ on, mgr, store, files, modrinth, catalog, spawn, tarBin, backupDir });
 
 // ---------- итоговая командная строка ----------
 on('GET', '/api/servers/:id/commandline', async (c) => {
@@ -877,10 +590,10 @@ function serveStatic(req, res, pathname) {
   });
 }
 
-function authorized(req, url) {
+function principal(req, url) {
   const h = req.headers.authorization || '';
   const t = h.startsWith('Bearer ') ? h.slice(7) : url.searchParams.get('token') || '';
-  return t.length > 0 && t === store.config.panelToken;
+  return access.who(t);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -892,11 +605,14 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   if (!url.pathname.startsWith('/api/')) return serveStatic(req, res, url.pathname);
   if (url.pathname === '/api/ping') return json(res, 200, { app: 'hearth', version: VERSION });
-  if (!authorized(req, url)) return json(res, 401, { error: 'нужен токен доступа' });
+  const who = principal(req, url);
+  if (!who) return json(res, 401, { error: 'нужен токен доступа' });
+  if (!access.allow(who, req.method, url.pathname)) return json(res, 403, { error: 'недостаточно прав для этого действия' });
 
   if (url.pathname === '/api/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', connection: 'keep-alive', 'x-accel-buffering': 'no' });
     res.write('retry: 2000\n\n');
+    res.principal = who;
     sse.add(res);
     bgAsked = false;
     clearTimeout(quitTimer);
@@ -950,7 +666,13 @@ const server = http.createServer(async (req, res) => {
       const body = req.method === 'GET' || req.method === 'DELETE' ? {} : await readBody(req);
       const params = {};
       for (const [k, v] of Object.entries(m.groups || {})) params[k] = decodeURIComponent(v);
-      const out = await r.fn({ params, query: url.searchParams, body });
+      let out = await r.fn({ params, query: url.searchParams, body });
+      if (!who.admin && req.method === 'GET' && out) {
+        if (url.pathname === '/api/servers') out = access.filterServers(who, out);
+        else if (/^\/api\/servers\/[^/]+$/.test(url.pathname)) out = access.redact(out);
+        else if (url.pathname === '/api/tunnels') out = access.filterTunnels(who, out);
+        else if (url.pathname === '/api/tasks') out = access.filterTasks(who, out);
+      }
       if (out && Object.prototype.hasOwnProperty.call(out, '__icon')) {
         if (!out.__icon) return json(res, 404, { error: 'значка нет' });
         return sendIcon(res, out.__icon);
@@ -970,6 +692,8 @@ function shutdown() {
   shuttingDown = true;
   console.log('\n[hearth] остановка серверов…');
   sched.stop();
+  updater.stop();
+  notifier.stop();
   tunnel.stop();
   mgr.shutdown();
   store.flush();
@@ -1110,6 +834,8 @@ async function start() {
   duckTick = publicname.start({ ipSource: publicIpOfServers, emit });
   duckTick().catch(() => {});
   relayHost.autostart();
+  updater.start();
+  notifier.start();
   restartRelay();
   relayAuto();
   if (process.env.AUTOSTART !== '0') {

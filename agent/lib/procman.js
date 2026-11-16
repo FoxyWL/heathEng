@@ -260,7 +260,15 @@ class Manager {
     if (patch.name) s.name = String(patch.name).slice(0, 60);
     if (typeof patch.autoRestart === 'boolean') s.autoRestart = patch.autoRestart;
     if (typeof patch.autostart === 'boolean') s.autostart = patch.autostart;
-    if (patch.tunnel) s.tunnel = { ...s.tunnel, ...patch.tunnel };
+    if (patch.tunnel) {
+      const t = { ...patch.tunnel };
+      if ('customHost' in t) {
+        const h = String(t.customHost || '').trim().toLowerCase().replace(/\.$/, '');
+        if (h && !require('./domainhelp').validHost(h)) throw Object.assign(new Error('своё имя: вида play.example.com'), { status: 400 });
+        t.customHost = h;
+      }
+      s.tunnel = { ...s.tunnel, ...t };
+    }
     if (patch.settings) {
       s.settings = { ...s.settings, ...patch.settings };
       if (r.state === 'running' || r.state === 'starting') r.restartRequired = true;

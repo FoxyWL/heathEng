@@ -509,8 +509,8 @@ async function main() {
   await step('invite: "Получить адрес" -> address, Copy, "Выключить"', async () => {
     await page.click('.srv:has-text("Свой сервер 2")');
     await page.click('.invite .btn.flame');
-    await page.waitForSelector('.invite .addr:not(.dim)', { timeout: 7000 });
-    const addrText = await page.textContent('.invite .addr');
+    await page.waitForSelector('[data-role=main-addr]', { timeout: 7000 }); // именно адрес туннеля, а не строки «В вашей сети» и «Из интернета»
+    const addrText = await page.textContent('[data-role=main-addr]');
     assert(/127\.0\.0\.1:\d+/.test(addrText), 'address: ' + addrText);
     assert((await page.locator('.invite.fresh').count()) === 1, 'glow class on new address');
     await page.click('.invite .btn:has-text("Скопировать")');

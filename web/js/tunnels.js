@@ -1,6 +1,7 @@
 'use strict';
 // @imports:start
 import { dual, fmtRate, spark } from './charts.js';
+import { domainBox } from './domainbox.js';
 import { icon } from './icons.js';
 import { T, api, click, clock, copy, fmtSize, guard, h, toast, uptime } from './lib.js';
 import { relayFinder } from './relayfind.js';
@@ -55,9 +56,10 @@ export function tunnelsPage() {
   const port = h('input', { type: 'number', value: r.port || 7000 });
   const tok = h('input', { type: 'password', placeholder: r.hasToken ? T('сохранён — оставьте пустым, чтобы не менять', 'saved — leave blank to keep') : T('токен релея', 'relay token'), autocomplete: 'off' });
   const en = h('input', { type: 'checkbox', checked: r.enabled });
+  const wild = h('input', { type: 'checkbox', checked: !!r.wildcard, 'data-role': 'relay-wildcard' });
   const saveRelay = h('button', { class: 'btn primary' }, T('Сохранить и подключиться', 'Save and connect'));
   saveRelay.addEventListener('click', click(async () => {
-    setTun(await api('PUT', '/api/relay', { host: host.value, port: +port.value, token: tok.value, enabled: en.checked }));
+    setTun(await api('PUT', '/api/relay', { host: host.value, port: +port.value, token: tok.value, enabled: en.checked, wildcard: wild.checked }));
     toast(T('Настройки туннеля сохранены', 'Tunnel settings saved'));
     renderRail();
     renderMain();
@@ -116,12 +118,14 @@ export function tunnelsPage() {
         detailHost),
       h('div', { class: 'sect' }, h('h3', {}, T('Подключение к релею', 'Connect to a relay')), relayFinder(() => { renderRail(); renderMain(); })),
       relayHostBox(),
+      domainBox(),
       h('details', { class: 'help' }, h('summary', {}, T('Ввести адрес вручную', 'Enter the address manually')),
         h('div', { class: 'form' },
           h('div', { class: 'field' }, h('label', {}, T('Адрес релея', 'Relay host'), host), h('small', {}, T('Домен или IP вашего VPS', 'Domain or IP of your VPS'))),
           h('div', { class: 'field' }, h('label', {}, T('Порт управления', 'Control port'), port)),
           h('div', { class: 'field wide' }, h('label', {}, T('Токен', 'Token'), tok)),
-          h('div', { class: 'field wide' }, h('label', { class: 'check' }, en, h('span', {}, T('Включить туннели', 'Enable tunnels'))))),
+          h('div', { class: 'field wide' }, h('label', { class: 'check' }, en, h('span', {}, T('Включить туннели', 'Enable tunnels')))),
+          h('div', { class: 'field wide' }, h('label', { class: 'check', title: T('Для релея со своим доменом: если у домена релея есть запись *.домен, адреса игр получат красивое имя.', 'For a relay with your own domain: if the relay domain has a *.domain record, game addresses get a readable name.') }, wild, h('span', {}, T('У домена релея настроен wildcard-DNS (*.домен)', 'The relay domain has wildcard DNS (*.domain)'))))),
         h('div', { class: 'savebar' }, saveRelay)),
       h('div', { class: 'sect' },
         h('h3', {}, T('Открыть любой порт', 'Expose any port')),

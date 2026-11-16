@@ -1,8 +1,12 @@
 'use strict';
 // @imports:start
+import { cloudBox } from './cloudbox.js';
 import { T, api, applyTheme, click, fmtMem, guard, h, lang, setLang, toast } from './lib.js';
+import { notifyBox } from './notifybox.js';
 import { quitApp, render } from './shell.js';
 import { S, fill, ui } from './state.js';
+import { updateBox } from './updatebox.js';
+import { usersBox } from './usersbox.js';
 // @imports:end
 
 export function settingsPage() {
@@ -56,6 +60,10 @@ export function settingsPage() {
         h('div', { class: 'field' }, h('label', {}, T('Язык', 'Language'), l)),
         h('div', { class: 'field' }, h('label', {}, T('Тема оформления', 'Theme'), themeSel))),
       startSect,
+      updateBox(),
+      usersBox(),
+      cloudBox(),
+      notifyBox(),
       h('div', { class: 'sect' },
         h('h3', {}, T('ИИ-помощник для логов', 'AI log assistant')),
         h('p', { class: 'muted' }, T('По умолчанию выключен и ничего не отправляет. Когда включён, фрагмент журнала уходит в Claude API по вашему ключу только после нажатия «Объяснить ошибки» в консоли. Ответы могут быть неточными — проверяйте перед применением на рабочем сервере.', 'Off by default and sends nothing. When enabled, a log fragment goes to the Claude API with your own key only after you press “Explain errors” in the console. Answers may be inaccurate — verify before applying them on a live server.')),

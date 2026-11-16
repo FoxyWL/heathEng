@@ -385,3 +385,12 @@ kbd { font: 12px var(--mono); padding: 1px 6px; border: 1px solid var(--line); b
 .relayhost .rh-status { display: flex; align-items: center; gap: 8px; }
 .relayhost .addr-row { margin: 8px 0; }
 .relayhost .addr { word-break: break-all; }
+
+.upd-new { padding: 10px 12px; border: 1px solid var(--line, rgba(128,128,128,.3)); border-radius: 10px; margin: 8px 0; }
+.upd-new .progress { margin: 8px 0 4px; }
+
+.domainbox table.dns { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.domainbox table.dns th, .domainbox table.dns td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line, rgba(128,128,128,.25)); word-break: break-all; }
+
+.notify-row { align-items: center; margin: 6px 0; }
+.notify-events { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 12px; margin: 10px 0; }

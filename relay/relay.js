@@ -36,6 +36,7 @@ const about = () => ({ hearthRelay: 1, name: cfg.domain, host: cfg.publicHost, p
 const clients = new Set();
 const httpTunnels = new Map();
 const vhostTunnels = new Map();
+const vhostHosts = new Map(); // полные имена, которые хозяин привёл на релей сам (play.example.com)
 const pending = new Map();
 let tidSeq = 1;
 
@@ -217,6 +218,9 @@ function sniffHost(b) {
   return sniffMinecraft(b);
 }
 
+const normHost = (h) => String(h || '').toLowerCase().replace(/\.$/, '');
+const validHost = (h) => /^(?=.{3,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/.test(h);
+
 function subOf(host) {
   host = String(host || '').toLowerCase().replace(/\.$/, '');
   return host.endsWith('.' + cfg.domain) ? host.slice(0, -cfg.domain.length - 1) : '';
@@ -286,7 +290,7 @@ function handleVhostSocket(sock) {
       const body = JSON.stringify(about());
       return sock.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\naccess-control-allow-origin: *\r\ncontent-length: ${Buffer.byteLength(body)}\r\nconnection: close\r\n\r\n${body}`);
     }
-    const t = vhostTunnels.get(subOf(info.host));
+    const t = vhostHosts.get(normHost(info.host)) || vhostTunnels.get(subOf(info.host));
     if (!t) return replyUnknown(sock, info, info.host, buf);
     routeToClient(t.client, t, sock, buf);
   };
@@ -325,9 +329,19 @@ async function openTunnel(client, msg) {
       if (msg.subdomain && !msg.hint) throw new Error('имя занято');
       sub = crypto.randomBytes(4).toString('hex');
     }
+    const hosts = [];
+    for (const raw of Array.isArray(msg.hosts) ? msg.hosts.slice(0, 4) : []) {
+      const h = normHost(raw);
+      if (!validHost(h)) throw new Error('неверное имя: ' + String(raw).slice(0, 80));
+      const other = vhostHosts.get(h);
+      if (other && other.client !== client) throw new Error('имя занято: ' + h);
+      hosts.push(h);
+    }
     tunnel.sub = sub;
     tunnel.vhost = true;
     vhostTunnels.set(sub, tunnel);
+    tunnel.hosts = hosts;
+    for (const h of hosts) vhostHosts.set(h, tunnel);
     const host = `${sub}.${cfg.domain}`;
     tunnel.info = { host, port: cfg.vhostPort, url: `${host}:${cfg.vhostPort}` };
   } else if (proto === 'tcp') {
@@ -381,6 +395,7 @@ function closeTunnel(client, id) {
   client.tunnels.delete(id);
   if (t.sub && httpTunnels.get(t.sub) === t) httpTunnels.delete(t.sub);
   if (t.sub && vhostTunnels.get(t.sub) === t) vhostTunnels.delete(t.sub);
+  for (const h of t.hosts || []) if (vhostHosts.get(h) === t) vhostHosts.delete(h);
   if (t.gc) clearInterval(t.gc);
   if (t.dataSock) t.dataSock.destroy();
   if (t.server) {
